@@ -32,8 +32,6 @@ message Request {
     string lock_expt = 16;
     // request unlock of experiment. Reply type is ok or error
     google.protobuf.Empty unlock_expt = 17;
-    // request shutdown of controller. Reply type is ok or error
-    google.protobuf.Empty shutdown = 18;
     // request update to parameter values. Reply type is ok or error.
     ComponentParams set_parameters = 19;
     // request parameter values for component. Reply type is params or error.
