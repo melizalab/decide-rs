@@ -1,23 +1,21 @@
 syntax = "proto3";
 import "google/protobuf/empty.proto";
+import "google/protobuf/any.proto";
 
 package decide;
 
-/* The payload for a requested state change to a component. Component state may
-   be a scalar (int32) or a label (string) */
+/* The payload for a requested state change to a component. Components must
+   define a protobuf message type for their state */
 message StateChange {
   string component = 1;
-  oneof state {
-    int32 scalar = 4;
-    string label = 5;
-  }
+  google.protobuf.Any state = 2;
 }
 
-/* The payload for a requested change to the parameters for a component */
+/* The payload for a requested change to the parameters for a component.
+   Components must define a protobuf message type for their parameters */
 message ComponentParams {
   string component = 1;
-  // The documentation for the component must define how the parameter value will be parsed from the string.
-  map<string, string> parameters = 2;
+  google.protobuf.Any parameters = 2;
 }
 
 /* This is what gets sent on the wire */
@@ -47,13 +45,13 @@ message Request {
 message Reply {
   string protocol = 1;
   oneof reply {
-    // For state_change, state_reset, lock_expt, unlock_expt, shutdown:
+    // For state_change, state_reset, lock_expt, unlock_expt:
     // indicates the request was correctly formed and was acted on
     google.protobuf.Empty ok = 2;
     // indicates an error with the request, contents give the cause
     string error = 3;
     // reply to get_parameters
-    map<string, string> params = 19;
+    google.protobuf.Any params = 19;
     // reply to get_component_config, and get_controller_config
     map<string, string> config = 20;
   }
