@@ -1,8 +1,24 @@
 syntax = "proto3";
 import "google/protobuf/empty.proto";
 import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
 
 package decide;
+
+service DecideControl {
+  // request change to state of a component
+  rpc ChangeState(StateChange) returns (Reply);
+  // request reset to default state
+  rpc ResetState(Component) returns (Reply);
+  // request lock on experiment
+  rpc RequestLock(Config) returns (Reply);
+  // request unlock of experiment
+  rpc ReleaseLock(google.protobuf.Empty) returns (Reply);
+  // request update to parameter values
+  rpc SetParameters(ComponentParams) returns (Reply);
+  // request parameter values for component
+  rpc GetParameters(Component) returns (Reply);
+}
 
 /* The payload for a requested state change to a component. Components must
    define a protobuf message type for their state */
@@ -18,33 +34,17 @@ message ComponentParams {
   google.protobuf.Any parameters = 2;
 }
 
-/* This is what gets sent on the wire */
-message Request {
-  string protocol = 1;
-  oneof request {
-    // request change to state of a component. Reply type is ok or error.
-    StateChange state_change = 2;
-    // request reset to default state; value is name of component. Reply type is ok or error
-    string state_reset = 3;
-    // request lock on experiment; value is name of experiment. Reply type is ok or error
-    string lock_expt = 16;
-    // request unlock of experiment. Reply type is ok or error
-    google.protobuf.Empty unlock_expt = 17;
-    // request update to parameter values. Reply type is ok or error.
-    ComponentParams set_parameters = 19;
-    // request parameter values for component. Reply type is params or error.
-    string get_parameters = 20;
-    // request config values for component. Reply type is config or error.
-    string get_component_config = 21;
-    // request config identifier for the controller. Reply type is config or error.
-    google.protobuf.Empty get_controller_config = 22;
-  }
+message Component {
+  string name = 1;
+}
+
+message Config {
+  string identifier = 1;
 }
 
 /* These are the reply types */
 message Reply {
-  string protocol = 1;
-  oneof reply {
+  oneof result {
     // For state_change, state_reset, lock_expt, unlock_expt:
     // indicates the request was correctly formed and was acted on
     google.protobuf.Empty ok = 2;
@@ -53,7 +53,6 @@ message Reply {
     // reply to get_parameters
     google.protobuf.Any params = 19;
     // reply to get_component_config, and get_controller_config
-    map<string, string> config = 20;
   }
 }
 
@@ -65,10 +64,6 @@ message Reply {
  * human-readable explanation is stored in the `label` field.
  */
 message Pub {
-  uint64 time = 1;
-  string component = 2;
-  oneof value {
-    int scalar = 3;
-    string label = 4;
-  }
+  google.protobuf.Timestamp time = 1;
+  StateChange update = 3;
 }
