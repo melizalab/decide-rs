@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 decide-proto = { path = "../decide-proto" }
+lights = { path = "../components/lights" }
 tmq = "0.3.0"
 log = "0.4.14"
 tokio = { version = "1.12", features = ["full"] }

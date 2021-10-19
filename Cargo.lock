@@ -72,6 +72,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "decide-proto",
+ "lights",
  "log",
  "pretty_env_logger",
  "prost",
@@ -289,6 +290,15 @@ name = "libc"
 version = "0.2.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd8f7255a17a627354f321ef0055d63b898c6fb27eff628af4d1b66b7331edf6"
+
+[[package]]
+name = "lights"
+version = "0.1.0"
+dependencies = [
+ "decide-proto",
+ "prost",
+ "prost-build",
+]
 
 [[package]]
 name = "lock_api"

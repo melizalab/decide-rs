@@ -1,7 +1,7 @@
-use decide_core::ComponentList;
+use anyhow::Result;
+use decide_core::Components;
 use std::env;
 use tmq::{reply, Context};
-use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
 
     let mut recv_sock = reply(&Context::new()).bind("tcp://127.0.0.1:7897")?;
 
-    let mut components = ComponentList{};
+    let mut components = Components::new();
     loop {
         let (multipart, send_sock) = recv_sock.recv().await?;
         let response = components.dispatch(&multipart.into())?;

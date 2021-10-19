@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+message State {
+  bool on = 1;
+}
+
+message Params {
+  bool auto = 1;
+}

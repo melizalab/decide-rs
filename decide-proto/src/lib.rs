@@ -1,5 +1,6 @@
 use enumn::N;
-use prost::{DecodeError, Message as ProtoMessage};
+use prost::{DecodeError, Message as ProstMessage};
+use prost_types::Any;
 use std::iter;
 use thiserror::Error;
 use tmq::{Message, Multipart};
@@ -62,14 +63,56 @@ pub enum DecideError {
     InvalidRequestType,
     #[error("Could not decode message")]
     MessageDecodingError(#[from] DecodeError),
+    #[error("Unrecognized component identifier")]
+    UnknownComponent,
+    #[error("Unrecognized component driver name")]
+    UnknownDriver,
+    #[error("Controller is already locked")]
+    AlreadyLocked,
+    #[error("No state message provided")]
+    NoState,
+    #[error("No parameters message provided")]
+    NoParameters,
 }
 
-trait Component {
-    type State;
-    type Params;
+pub trait Component {
+    type State: ProstMessage + Default;
+    type Params: ProstMessage + Default;
+    type Config;
+    const STATE_TYPE_URL: &'static str;
+    const PARAMS_TYPE_URL: &'static str;
 
-    fn change_state(state: Self::State) -> Result<(), DecideError>;
-    fn reset_state() -> Result<(), DecideError>;
-    fn set_parameters(params: Self::Params) -> Result<(), DecideError>;
-    fn get_parameters() -> Self::Params;
+    fn new() -> Self;
+    fn init(config: Self::Config);
+    fn change_state(&mut self, state: Self::State) -> Result<(), DecideError>;
+    fn set_parameters(&mut self, params: Self::Params) -> Result<(), DecideError>;
+    fn get_parameters(&self) -> Self::Params;
+    fn get_encoded_parameters(&self) -> Any {
+        let mut message = Any::default();
+        message.value = self.get_parameters().encode_to_vec();
+        message.type_url = Self::PARAMS_TYPE_URL.into();
+        message
+    }
+    fn reset_state(&mut self) -> Result<(), DecideError> {
+        self.change_state(Self::State::default())
+    }
+    fn decode_and_change_state(&mut self, message: Any) -> Result<(), DecideError> {
+        assert_eq!(message.type_url, Self::STATE_TYPE_URL);
+        self.change_state(Self::State::decode(&*message.value)?)
+    }
+    fn decode_and_set_parameters(&mut self, message: Any) -> Result<(), DecideError> {
+        assert_eq!(message.type_url, Self::PARAMS_TYPE_URL);
+        self.set_parameters(Self::Params::decode(&*message.value)?)
+    }
+}
+
+impl From<Result<decide::reply::Result, DecideError>> for decide::Reply {
+    fn from(result: Result<decide::reply::Result, DecideError>) -> Self {
+        let mut reply = decide::Reply::default();
+        reply.result = Some(match result {
+            Err(e) => decide::reply::Result::Error(e.to_string()),
+            Ok(r) => r,
+        });
+        reply
+    }
 }
