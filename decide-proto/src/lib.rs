@@ -4,6 +4,10 @@ use prost_types::Any;
 use std::iter;
 use thiserror::Error;
 use tmq::{Message, Multipart};
+use tokio::sync::mpsc;
+use async_trait::async_trait;
+use serde::de::DeserializeOwned;
+use serde_yaml::Error as YamlError;
 
 pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
 
@@ -73,24 +77,36 @@ pub enum DecideError {
     NoState,
     #[error("No parameters message provided")]
     NoParameters,
+    #[error("Could not find config directory")]
+    NoConfigDir,
+    #[error("Could not parse yaml")]
+    YamlParseError(#[from] YamlError),
 }
 
+#[async_trait]
 pub trait Component {
     type State: ProstMessage + Default;
     type Params: ProstMessage + Default;
-    type Config;
+    type Config: DeserializeOwned;
     const STATE_TYPE_URL: &'static str;
     const PARAMS_TYPE_URL: &'static str;
 
     fn new() -> Self;
-    fn init(config: Self::Config);
+    async fn init(&self, config: Self::Config, sender: mpsc::Sender<Any>);
     fn change_state(&mut self, state: Self::State) -> Result<(), DecideError>;
     fn set_parameters(&mut self, params: Self::Params) -> Result<(), DecideError>;
+    fn get_state(&self) -> Self::State;
     fn get_parameters(&self) -> Self::Params;
     fn get_encoded_parameters(&self) -> Any {
         let mut message = Any::default();
         message.value = self.get_parameters().encode_to_vec();
         message.type_url = Self::PARAMS_TYPE_URL.into();
+        message
+    }
+    fn get_encoded_state(&self) -> Any {
+        let mut message = Any::default();
+        message.value = self.get_state().encode_to_vec();
+        message.type_url = Self::STATE_TYPE_URL.into();
         message
     }
     fn reset_state(&mut self) -> Result<(), DecideError> {

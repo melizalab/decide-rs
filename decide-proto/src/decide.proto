@@ -65,5 +65,5 @@ message Reply {
  */
 message Pub {
   google.protobuf.Timestamp time = 1;
-  StateChange update = 3;
+  google.protobuf.Any state = 2;
 }

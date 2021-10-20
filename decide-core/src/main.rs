@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
 
     let mut recv_sock = reply(&Context::new()).bind("tcp://127.0.0.1:7897")?;
 
-    let mut components = Components::new();
+    let mut components = Components::new()?;
     loop {
         let (multipart, send_sock) = recv_sock.recv().await?;
         let response = components.dispatch(&multipart.into())?;

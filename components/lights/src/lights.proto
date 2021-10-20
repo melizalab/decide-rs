@@ -5,5 +5,5 @@ message State {
 }
 
 message Params {
-  bool auto = 1;
+  bool blink = 1;
 }

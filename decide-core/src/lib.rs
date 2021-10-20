@@ -1,21 +1,44 @@
 use decide_proto::{decide, DecideError, DecideRequest, RequestType, DECIDE_VERSION};
 use prost::Message;
 use std::collections::HashMap;
+use directories::ProjectDirs;
+use std::fs::File;
+use serde::Deserialize;
+use std::convert::TryFrom;
+use serde_yaml;
 
 mod components;
 use components::ComponentKind;
 
 pub struct Components {
-    map: HashMap<String, ComponentKind>,
+    components: HashMap<String, ComponentKind>,
     locked: bool,
 }
 
+#[derive(Deserialize)]
+struct ComponentsConfig {
+    components: Vec<ComponentsConfigItem>,
+}
+
+#[derive(Deserialize)]
+struct ComponentsConfigItem {
+    driver: String,
+    config: serde_yaml::Value,
+}
+
 impl Components {
-    pub fn new() -> Self {
-        Components {
-            map: HashMap::new(),
+    pub fn new() -> Result<Self, DecideError> {
+        let config_file = ProjectDirs::from("org", "meliza", "decide").ok_or_else(|| DecideError::NoConfigDir)?.config_dir().join("components.yml");
+        let components_config: ComponentsConfig = serde_yaml::from_reader(File::open(config_file).unwrap())?;
+        let components = components_config.components.into_iter()
+            .map(|item| {
+                let component = ComponentKind::try_from(&item.driver[..]).unwrap();
+                (item.driver, component)
+            }).collect();
+        Ok(Components {
+            components,
             locked: false,
-        }
+        })
     }
 
     pub fn dispatch(&mut self, request: &DecideRequest) -> Result<decide::Reply, DecideError> {
@@ -46,7 +69,7 @@ impl Components {
     ) -> Result<decide::reply::Result, DecideError> {
         let component_name = state_change.component.to_string();
         let component = self
-            .map
+            .components
             .get_mut(&component_name)
             .ok_or_else(|| DecideError::UnknownComponent)?;
         component
@@ -60,7 +83,7 @@ impl Components {
     ) -> Result<decide::reply::Result, DecideError> {
         let component_name = component.name.to_string();
         let component = self
-            .map
+            .components
             .get_mut(&component_name)
             .ok_or_else(|| DecideError::UnknownComponent)?;
         component.reset_state()?;
@@ -73,7 +96,7 @@ impl Components {
     ) -> Result<decide::reply::Result, DecideError> {
         let component_name = params.component.to_string();
         let component = self
-            .map
+            .components
             .get_mut(&component_name)
             .ok_or_else(|| DecideError::UnknownComponent)?;
         component.decode_and_set_parameters(
@@ -88,7 +111,7 @@ impl Components {
     ) -> Result<decide::reply::Result, DecideError> {
         let component_name = component.name.to_string();
         let component = self
-            .map
+            .components
             .get_mut(&component_name)
             .ok_or_else(|| DecideError::UnknownComponent)?;
         let params = component.get_encoded_parameters();

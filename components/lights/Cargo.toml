@@ -9,6 +9,10 @@ edition = "2018"
 [dependencies]
 decide-proto = { path = "../../decide-proto" }
 prost = "0.9"
+tokio = { version = "1.12", features = ["full"] }
+prost-types = "0.9"
+async-trait = "0.1.51"
+serde = { version = "1.0", features = ["derive"] }
 
 [build-dependencies]
 prost-build = "0.9"
