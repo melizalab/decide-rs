@@ -1,7 +1,9 @@
 use decide_proto::{Component, DecideError};
 use lights::Lights;
 use prost_types::Any;
+use serde_value::Value;
 use std::convert::TryFrom;
+use tokio::sync::mpsc;
 
 macro_rules! impl_component {
     ($($component:ident),*) => {
@@ -36,6 +38,13 @@ macro_rules! impl_component {
                     match self {
                         $(
                             ComponentKind::$component(t) => t.get_encoded_parameters()
+                        )*
+                    }
+                }
+                pub fn deserialize_and_init(&self, config: Value, sender: mpsc::Sender<Any>) -> Result<(), DecideError> {
+                    match self {
+                        $(
+                            ComponentKind::$component(t) => t.deserialize_and_init(config, sender),
                         )*
                     }
                 }

@@ -1,16 +1,23 @@
-use decide_proto::{Component, DecideError};
 use async_trait::async_trait;
-use prost_types::Any;
-use tokio::{self, sync::mpsc, time::{sleep, Duration}};
+use decide_proto::{Component, DecideError};
 use prost::Message;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use prost_types::Any;
 use serde::Deserialize;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tokio::{
+    self,
+    sync::mpsc,
+    time::{sleep, Duration},
+};
 
 pub mod lights {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct LightsConfig {
     pin: u8,
 }
@@ -35,24 +42,25 @@ impl Component for Lights {
         }
     }
 
-    async fn init(&self, config: Self::Config, sender: mpsc::Sender<Any>) {
+    fn init(&self, config: Self::Config, sender: mpsc::Sender<Any>) {
         let blink = self.blink.clone();
         let on = self.on.clone();
-        tokio::spawn( async move {
+        println!("Lights with config {:?}", config);
+        tokio::spawn(async move {
             loop {
                 if blink.load(Ordering::Relaxed) {
                     let old_state = on.fetch_xor(true, Ordering::Relaxed);
                     let new_state = !old_state;
-                    let mut state = Self::State::default();
-                    state.on = new_state;
-                    let mut message = Any::default();
-                    message.value = state.encode_to_vec();
-                    message.type_url = Self::STATE_TYPE_URL.into();
+                    let state = Self::State { on: new_state };
+                    let message = Any {
+                        value: state.encode_to_vec(),
+                        type_url: Self::STATE_TYPE_URL.into(),
+                    };
                     sender.send(message).await.unwrap();
                     sleep(Duration::from_millis(100)).await;
                 }
             }
-        }).await.unwrap();
+        });
     }
 
     fn change_state(&mut self, state: Self::State) -> Result<(), DecideError> {
@@ -66,14 +74,14 @@ impl Component for Lights {
     }
 
     fn get_parameters(&self) -> Self::Params {
-        let mut params = Self::Params::default();
-        params.blink = self.blink.load(Ordering::Relaxed);
-        params
+        Self::Params {
+            blink: self.blink.load(Ordering::Relaxed),
+        }
     }
 
     fn get_state(&self) -> Self::State {
-        let mut state = Self::State::default();
-        state.on = self.on.load(Ordering::Relaxed);
-        state
+        Self::State {
+            on: self.on.load(Ordering::Relaxed),
+        }
     }
 }

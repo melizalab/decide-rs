@@ -9,7 +9,7 @@ service DecideControl {
   // request change to state of a component
   rpc ChangeState(StateChange) returns (Reply);
   // request reset to default state
-  rpc ResetState(Component) returns (Reply);
+  rpc ResetState(google.protobuf.Empty) returns (Reply);
   // request lock on experiment
   rpc RequestLock(Config) returns (Reply);
   // request unlock of experiment
@@ -17,25 +17,19 @@ service DecideControl {
   // request update to parameter values
   rpc SetParameters(ComponentParams) returns (Reply);
   // request parameter values for component
-  rpc GetParameters(Component) returns (Reply);
+  rpc GetParameters(google.protobuf.Empty) returns (Reply);
 }
 
 /* The payload for a requested state change to a component. Components must
    define a protobuf message type for their state */
 message StateChange {
-  string component = 1;
-  google.protobuf.Any state = 2;
+  google.protobuf.Any state = 1;
 }
 
 /* The payload for a requested change to the parameters for a component.
    Components must define a protobuf message type for their parameters */
 message ComponentParams {
-  string component = 1;
-  google.protobuf.Any parameters = 2;
-}
-
-message Component {
-  string name = 1;
+  google.protobuf.Any parameters = 1;
 }
 
 message Config {

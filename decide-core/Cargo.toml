@@ -10,6 +10,7 @@ edition = "2018"
 decide-proto = { path = "../decide-proto" }
 lights = { path = "../components/lights" }
 tmq = "0.3.0"
+zmq = "0.9.2"
 log = "0.4.14"
 tokio = { version = "1.12", features = ["full"] }
 pretty_env_logger = "0.4.0"
@@ -19,3 +20,8 @@ anyhow = "1.0"
 directories = "4.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
+futures = "0.3.17"
+serde-value = "0.7.0"
+sha3 = "0.9.1"
+generic-array = "0.14.4"
+num-traits = "0.2.14"
