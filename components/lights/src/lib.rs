@@ -73,15 +73,15 @@ impl Component for Lights {
         Ok(())
     }
 
-    fn get_parameters(&self) -> Self::Params {
-        Self::Params {
-            blink: self.blink.load(Ordering::Relaxed),
-        }
-    }
-
     fn get_state(&self) -> Self::State {
         Self::State {
             on: self.on.load(Ordering::Relaxed),
+        }
+    }
+
+    fn get_parameters(&self) -> Self::Params {
+        Self::Params {
+            blink: self.blink.load(Ordering::Relaxed),
         }
     }
 }

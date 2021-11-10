@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+message State {
+  bool on = 1;
+  bool clock_on = 2;
+  int32 brightness = 3;
+}
+
+message Params {
+  bool auto_update = 1;
+  //int64 clock_interval = 3; not sure what this does yet
+}

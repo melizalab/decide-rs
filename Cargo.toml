@@ -4,4 +4,5 @@ members = [
     "decide-proto",
     "decide-core",
     "components/lights",
+    "components/house_light",
 ]
