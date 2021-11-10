@@ -21,7 +21,6 @@ use std::fs::OpenOptions;
 use std::io::{self,prelude::*,Write, Read};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
 
-
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
