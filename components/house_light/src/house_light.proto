@@ -7,6 +7,5 @@ message State {
 }
 
 message Params {
-  bool auto_update = 1;
-  //int64 clock_interval = 3; not sure what this does yet
+  int64 clock_interval = 1;
 }

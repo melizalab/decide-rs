@@ -15,15 +15,14 @@ use std::cmp::{min,max};
 use sun;
 use std::fs::OpenOptions;
 use std::io::{self,prelude::*,Write, Read};
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
 use tokio::sync::mpsc::Sender;
 
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
     brightness: Arc<AtomicU8>,
-    auto_update: bool,
-    //daytime: AtomicBool,
+    interval: Arc<AtomicU32>
 }
 
 #[async_trait]
@@ -39,7 +38,7 @@ impl Component for HouseLight {
             switch: Arc::new(AtomicBool::new(false)),
             fake_clock: Arc::new(AtomicBool::new(false)),
             brightness: Arc::new(AtomicU8::new(0)),
-            auto_update: false
+            interval: Arc::new(AtomicU32::new(300))
         }
     }
 
@@ -47,6 +46,7 @@ impl Component for HouseLight {
         let switch = self.switch.clone();
         let fake_clock = self.fake_clock.clone();
         let brightness = self.brightness.clone();
+        let interval = self.interval.clone();
 
         tokio::spawn(async move {
             let mut device = OpenOptions::new()
@@ -71,9 +71,9 @@ impl Component for HouseLight {
                         value: state.encode_to_vec(),
                         type_url: Self::STATE_TYPE_URL.into(),
                     };
-                    sender.send(message).await.unwrap();
+                    state_sender.send(message).await.unwrap();
                 }
-                sleep(Duration::from_secs(300));
+                sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64));
             }
         });
 
@@ -87,15 +87,22 @@ impl Component for HouseLight {
     }
 
     fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
-        todo!()
+        self.interval.store(params.clock_interval, Ordering::Relaxed);
+        Ok(())
     }
 
     fn get_state(&self) -> Self::State {
-        todo!()
+        Self::State {
+            switch: self.switch.load(Ordering::Relaxed),
+            fake_clock: self.fake_clock.load(Ordering::Relaxed),
+            brightness: self.brightness.load(Ordering::Relaxed),
+        }
     }
 
     fn get_parameters(&self) -> Self::Params {
-        todo!()
+        Self::Params {
+            clock_interval: self.interval.load(Ordering::Relaxed)
+        }
     }
 }
 
