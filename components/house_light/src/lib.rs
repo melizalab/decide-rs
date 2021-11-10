@@ -1,22 +1,26 @@
 use decide_proto::{Component, DecideError};
-use async_trait::async_trait;
-use prost_types::Any;
-use tokio::{self, sync::mpsc, time::{sleep, Duration}};
 use prost::Message;
+use prost_types::Any;
+
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use serde::Deserialize;
 
-use std::{fs, thread};
+use async_trait::async_trait;
+use tokio::{self,
+            sync::mpsc::{self, Sender},
+            time::{sleep, Duration}
+};
+
 use std::time::{SystemTime, UNIX_EPOCH};
 use sun_times;
-use chrono;
-use chrono::{Utc, DateTime, Timelike};
+use chrono::{self, Utc, DateTime, Timelike};
 use std::cmp::{min,max};
 use sun;
+
 use std::fs::OpenOptions;
 use std::io::{self,prelude::*,Write, Read};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
-use tokio::sync::mpsc::Sender;
+
 
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
