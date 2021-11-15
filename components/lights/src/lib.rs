@@ -35,17 +35,17 @@ impl Component for Lights {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/lights_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/lights_params";
 
-    fn new() -> Self {
+    fn new(config: Self::Config) -> Self {
+        println!("Lights with config {:?}", config);
         Lights {
             on: Arc::new(AtomicBool::new(false)),
             blink: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn init(&self, config: Self::Config, sender: mpsc::Sender<Any>) {
+    async fn init(&self, sender: mpsc::Sender<Any>) {
         let blink = self.blink.clone();
         let on = self.on.clone();
-        println!("Lights with config {:?}", config);
         tokio::spawn(async move {
             loop {
                 if blink.load(Ordering::Relaxed) {

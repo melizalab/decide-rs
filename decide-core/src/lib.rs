@@ -6,24 +6,28 @@ use decide_proto::{
     Request, RequestType, Result,
 };
 use directories::ProjectDirs;
+use futures::{stream, Stream, StreamExt};
 use generic_array::{typenum::U32, GenericArray};
 use prost::Message;
 use prost_types::Any;
+use prost_types::Timestamp;
 use serde::Deserialize;
 use serde_value::Value;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs::File, io::Read};
 use tmq::Multipart;
 use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
 
 mod components;
 use components::ComponentKind;
 
 type RequestBundle = ((ComponentRequest, Vec<u8>), oneshot::Sender<decide::Reply>);
 pub struct ComponentCollection {
-    components: HashMap<ComponentName, (mpsc::Sender<RequestBundle>, mpsc::Receiver<Any>)>,
+    components: HashMap<ComponentName, mpsc::Sender<RequestBundle>>,
     locked: bool,
     config_id: GenericArray<u8, U32>,
 }
@@ -38,7 +42,7 @@ struct ComponentsConfigItem {
 }
 
 impl ComponentCollection {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<(Self, impl Stream<Item = decide::Pub>)> {
         let config_file = ProjectDirs::from("org", "meliza", "decide")
             .ok_or_else(|| DecideError::NoConfigDir)?
             .config_dir()
@@ -47,37 +51,26 @@ impl ComponentCollection {
         Self::from_reader(reader)
     }
 
-    pub fn from_reader<T: Read>(mut config_reader: T) -> Result<Self> {
+    pub fn from_reader<T: Read>(
+        mut config_reader: T,
+    ) -> Result<(Self, impl Stream<Item = decide::Pub>)> {
         let mut file_buf: Vec<u8> = Vec::new();
         config_reader
             .read_to_end(&mut file_buf)
             .map_err(|_| DecideError::ConfigReadError)?;
         let components_config: ComponentsConfig = serde_yaml::from_slice(&file_buf[..])?;
         let config_id = Sha3_256::new().chain(&file_buf).finalize();
-        let components = components_config
-            .0
-            .into_iter()
-            .map(|(name, item)| {
-                let (command_tx, mut command_rx) = mpsc::channel::<RequestBundle>(100);
-                let (state_tx, state_rx) = mpsc::channel::<Any>(100);
-                let mut component = ComponentKind::try_from(&item.driver[..]).unwrap();
-                component.deserialize_and_init(item.config, state_tx)?;
-                tokio::spawn(async move {
-                    while let Some(((request_type, payload), reply_tx)) = command_rx.recv().await {
-                        let reply = execute(&mut component, request_type, payload);
-                        reply_tx
-                            .send(reply.into())
-                            .expect("controller dropped a oneshot receiver");
-                    }
-                });
-                Ok((name, (command_tx, state_rx)))
-            })
-            .collect::<Result<_>>()?;
-        Ok(ComponentCollection {
-            components,
-            config_id,
-            locked: false,
-        })
+        let (components, state_stream): (_, HashMap<_, _>) =
+            components_config.0.into_iter().map(init_component).unzip();
+        let pub_stream = build_pub_stream(state_stream);
+        Ok((
+            ComponentCollection {
+                components,
+                config_id,
+                locked: false,
+            },
+            pub_stream,
+        ))
     }
 
     pub async fn dispatch(&mut self, mut request: Multipart) -> Multipart {
@@ -115,7 +108,7 @@ impl ComponentCollection {
         request_type: ComponentRequest,
         mut request: Request,
     ) -> Result<decide::Reply> {
-        let (component_tx, _) = self
+        let component_tx = self
             .components
             .get_mut(&request.component.take().unwrap())
             .ok_or_else(|| DecideError::UnknownComponent)?;
@@ -173,4 +166,46 @@ fn execute(
         }
     }
     .into())
+}
+
+fn build_pub_stream<I>(state_stream: I) -> impl Stream<Item = decide::Pub>
+where
+    I: IntoIterator<Item = (ComponentName, ReceiverStream<Any>)>,
+{
+    stream::select_all(
+        state_stream
+            .into_iter()
+            .map(|(name, state_rx)| state_rx.map(move |state| (name.clone(), state))),
+    )
+    .map(|(name, state)| decide::Pub {
+        state: Some(state),
+        time: Some(Timestamp {
+            seconds: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_secs() as i64,
+            nanos: 0,
+        }),
+    })
+}
+
+fn init_component(
+    (name, item): (ComponentName, ComponentsConfigItem),
+) -> (
+    (ComponentName, mpsc::Sender<RequestBundle>),
+    (ComponentName, ReceiverStream<Any>),
+) {
+    let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
+    let (state_tx, state_rx) = mpsc::channel::<Any>(100);
+    let mut component = ComponentKind::try_from((&item.driver[..], item.config)).unwrap();
+    tokio::spawn(async move {
+        component.init(state_tx).await;
+        while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
+            let reply = execute(&mut component, request_type, payload);
+            reply_tx
+                .send(reply.into())
+                .expect("controller dropped a oneshot receiver");
+        }
+    });
+    ((name.clone(), request_tx), (name, state_rx.into()))
 }

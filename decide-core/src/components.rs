@@ -1,4 +1,4 @@
-use decide_proto::{Component, DecideError};
+use decide_proto::{Component, DecideError, Result};
 use lights::Lights;
 use prost_types::Any;
 use serde_value::Value;
@@ -13,21 +13,21 @@ macro_rules! impl_component {
             )*
         }
         impl ComponentKind {
-                pub fn decode_and_change_state(&mut self, message: Any) -> Result<(), DecideError> {
+                pub fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(
                             ComponentKind::$component(t) => t.decode_and_change_state(message)
                         )*
                     }
                 }
-                pub fn decode_and_set_parameters(&mut self, message: Any) -> Result<(), DecideError> {
+                pub fn decode_and_set_parameters(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(
                             ComponentKind::$component(t) => t.decode_and_set_parameters(message)
                         )*
                     }
                 }
-                pub fn reset_state(&mut self) -> Result<(), DecideError> {
+                pub fn reset_state(&mut self) -> Result<()> {
                     match self {
                         $(
                             ComponentKind::$component(t) => t.reset_state()
@@ -41,21 +41,21 @@ macro_rules! impl_component {
                         )*
                     }
                 }
-                pub fn deserialize_and_init(&self, config: Value, sender: mpsc::Sender<Any>) -> Result<(), DecideError> {
+                pub async fn init(&self, sender: mpsc::Sender<Any>) {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.deserialize_and_init(config, sender),
+                            ComponentKind::$component(t) => t.init(sender).await,
                         )*
                     }
                 }
         }
 
-        impl TryFrom<&str> for ComponentKind {
+        impl TryFrom<(&str, Value)> for ComponentKind {
             type Error = DecideError;
-            fn try_from(driver_name: &str) -> Result<Self, Self::Error> {
+            fn try_from((driver_name, config): (&str, Value)) -> Result<Self> {
                 match driver_name {
                     $(
-                        stringify!($component) => Ok(ComponentKind::$component($component::new())),
+                        stringify!($component) => Ok(ComponentKind::$component($component::new($component::deserialize_config(config)?))),
                     )*
                     _ => Err(DecideError::UnknownDriver),
                 }

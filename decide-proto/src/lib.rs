@@ -1,8 +1,8 @@
 use async_trait::async_trait;
+use num_derive::{FromPrimitive, ToPrimitive};
+use num_traits::FromPrimitive;
 use prost::{DecodeError, Message as ProstMessage};
 use prost_types::Any;
-use num_derive::{ToPrimitive, FromPrimitive};
-use num_traits::{FromPrimitive};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_value::{DeserializerError, Value, ValueDeserializer};
 use serde_yaml::Error as YamlError;
@@ -13,13 +13,16 @@ use tokio::sync::{mpsc, oneshot};
 
 pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
 
+pub const REQ_ENDPOINT: &str = "tcp://127.0.0.1:7897";
+pub const PUB_ENDPOINT: &str = "tcp://127.0.0.1:7898";
+
 pub mod decide {
     include!(concat!(env!("OUT_DIR"), "/decide.rs"));
 }
 
 pub type Result<T> = core::result::Result<T, DecideError>;
 
-#[derive(Debug, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Hash, PartialEq, Eq, Clone)]
 pub struct ComponentName(String);
 
 impl From<&str> for ComponentName {
@@ -75,18 +78,17 @@ pub trait Component {
     const STATE_TYPE_URL: &'static str;
     const PARAMS_TYPE_URL: &'static str;
 
-    fn new() -> Self;
-    fn init(&self, config: Self::Config, state_sender: mpsc::Sender<Any>);
+    fn new(config: Self::Config) -> Self;
+    async fn init(&self, state_sender: mpsc::Sender<Any>);
     fn change_state(&mut self, state: Self::State) -> Result<()>;
     fn set_parameters(&mut self, params: Self::Params) -> Result<()>;
     fn get_state(&self) -> Self::State;
     fn get_parameters(&self) -> Self::Params;
-    fn deserialize_and_init(&self, config: Value, sender: mpsc::Sender<Any>) -> Result<()> {
+    fn deserialize_config(config: Value) -> Result<Self::Config> {
         let deserializer: ValueDeserializer<DeserializerError> = ValueDeserializer::new(config);
         let config = Self::Config::deserialize(deserializer)
             .map_err(|_| DecideError::ConfigDeserializationError)?;
-        self.init(config, sender);
-        Ok(())
+        Ok(config)
     }
     fn get_encoded_parameters(&self) -> Any {
         Any {
@@ -183,6 +185,12 @@ impl TryFrom<Multipart> for Request {
 impl From<decide::Reply> for Multipart {
     fn from(reply: decide::Reply) -> Self {
         vec![&DECIDE_VERSION[..], &reply.encode_to_vec()].into()
+    }
+}
+
+impl From<decide::Pub> for Multipart {
+    fn from(pub_message: decide::Pub) -> Self {
+        vec![&DECIDE_VERSION[..], &pub_message.encode_to_vec()].into()
     }
 }
 
