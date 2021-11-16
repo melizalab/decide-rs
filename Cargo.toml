@@ -5,6 +5,5 @@ members = [
     "decide-core",
     "components/lights",
     "components/house_light",
-    "components/stepper_motor",
-    "components/peckboard",
+    "components/stepper_motor"
 ]

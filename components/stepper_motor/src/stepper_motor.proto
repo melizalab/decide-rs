@@ -1,8 +1,9 @@
 syntax = "proto3";
 
 message State {
-  bool on = 1;
-  bool direction = 2;
+  bool cape_switch = 1;
+  bool running = 2;
+  bool direction = 3;
 }
 
 message Params {
