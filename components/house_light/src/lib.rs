@@ -21,10 +21,6 @@ use std::fs::OpenOptions;
 use std::io::{self,prelude::*,Write, Read};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
 
-pub mod house_light {
-    include!(concat!(env!("OUT_DIR"), "/_.rs"));
-}
-
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
@@ -40,7 +36,7 @@ impl Component for HouseLight {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
 
-    fn new(config: Self::Config) -> Self {
+    fn new() -> Self {
         HouseLight {
             switch: Arc::new(AtomicBool::new(false)),
             fake_clock: Arc::new(AtomicBool::new(false)),
@@ -83,6 +79,7 @@ impl Component for HouseLight {
                 sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64));
             }
         });
+
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
@@ -141,4 +138,3 @@ struct Config {
     latitude: f64,
     longitude: f64,
 }
-
