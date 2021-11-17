@@ -49,7 +49,10 @@ protocol as possible, but the current implementation uses
 [zeromq](https://zeromq.org), with an asynchronous PUB channel and a synchronous
 REQ channel.
 
-TODO: define port numbers here
+TODO: define port numbers here. Current temporary ports:
+
+- request port 7897
+- publish port 7898
 
 ### PUB channel
 
@@ -93,12 +96,6 @@ Requests that the state of the component specified by `name` be reset to its def
 
 #### Set parameters (0x02)
 
-#### Get component list (0x10)
-
-Requests a list of all the components that have been registered with the controller. Request body is ignored. Controller replies with a list of the components (reply type 0x02)
-
-#### Get component config (0x11)
-
 #### Get component parameters (0x12)
 
 #### Get component state type (0x13)
@@ -106,8 +103,6 @@ Requests a list of all the components that have been registered with the control
 #### Lock experiment (0x20)
 
 #### Unlock experiment (0x21)
-
-#### Shutdown (0x22)
 
 ### REP messages
 
@@ -121,18 +116,6 @@ For each REQ message, the `controller` must respond with a REP consisting of the
 #### OK (0x00)
 
 #### error (0x01)
-
-#### component list (0x10)
-
-``` protocol-buffer
-
-```
-
-#### Get component config (0x11)
-
-``` protocol-buffer
-
-```
 
 #### Get component parameters (0x12)
 
