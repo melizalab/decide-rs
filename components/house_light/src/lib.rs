@@ -36,7 +36,7 @@ impl Component for HouseLight {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
 
-    fn new() -> Self {
+    fn new(config: Self::Config) -> Self {
         HouseLight {
             switch: Arc::new(AtomicBool::new(false)),
             fake_clock: Arc::new(AtomicBool::new(false)),
@@ -79,7 +79,6 @@ impl Component for HouseLight {
                 sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64));
             }
         });
-
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {

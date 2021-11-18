@@ -10,6 +10,7 @@ use std::convert::TryFrom;
 use thiserror::Error;
 use tmq::Multipart;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time;
 
 pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
 
@@ -79,7 +80,7 @@ pub trait Component {
     const PARAMS_TYPE_URL: &'static str;
 
     fn new(config: Self::Config) -> Self;
-    async fn init(&self, state_sender: mpsc::Sender<Any>);
+    async fn init(&self, config: Self::Config, state_sender: mpsc::Sender<Any>);
     fn change_state(&mut self, state: Self::State) -> Result<()>;
     fn set_parameters(&mut self, params: Self::Params) -> Result<()>;
     fn get_state(&self) -> Self::State;
@@ -163,7 +164,7 @@ impl TryFrom<Multipart> for Request {
         let request_type = (*zmq_message.pop_front().unwrap())[0];
         let request_type = RequestType::try_from(request_type)?;
         let body = zmq_message.pop_front().unwrap().to_vec();
-        let componentuse tokio::{time::Duration}; = match request_type {
+        let componentuse = match request_type {
             General(_) => None,
             Component(_) => Some(
                 zmq_message
