@@ -943,6 +943,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "peckboard"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "decide-proto",
+ "futures",
+ "gpio-cdev",
+ "prost 0.9.0",
+ "prost-build 0.9.0",
+ "prost-types 0.9.0",
+ "serde",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
