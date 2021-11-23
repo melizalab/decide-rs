@@ -75,9 +75,9 @@ impl StepperMotor {
                 .map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
                 .unwrap();
             loop {
-                match on.load(Ordering::Relaxed) {
+                match on.load(Ordering::Acquire) {
                     true => {
-                        match direction.load(Ordering::Relaxed) {
+                        match direction.load(Ordering::Acquire) {
                             true => {
                                 step = (step + 1) % Self::NUM_HALF_STEPS;
                                 let step_1_values = &Self::HALF_STEPS[step].0;
@@ -161,20 +161,20 @@ impl Component for StepperMotorApparatus {
                     event = handle_14.next() => {
                         trace!("Switch 14 pushed");
                         match event.unwrap().unwrap().event_type() {
-                            EventType::RisingEdge => {on.store(false, Ordering::Relaxed)}
+                            EventType::RisingEdge => {on.store(false, Ordering::Release)}
                             EventType::FallingEdge => {
-                                on.store(true, Ordering::Relaxed);
-                                direction.store(false, Ordering::Relaxed);
+                                on.store(true, Ordering::Release);
+                                direction.store(false, Ordering::Release);
                             }
                         }
                     }
                     event = handle_15.next() => {
                         trace!("Switch 15 pushed");
                         match event.unwrap().unwrap().event_type() {
-                            EventType::RisingEdge => {on.store(false, Ordering::Relaxed)}
+                            EventType::RisingEdge => {on.store(false, Ordering::Release)}
                             EventType::FallingEdge => {
-                                on.store(true, Ordering::Relaxed);
-                                direction.store(true, Ordering::Relaxed);
+                                on.store(true, Ordering::Release);
+                                direction.store(true, Ordering::Release);
                             }
                         }
                     }
@@ -184,8 +184,8 @@ impl Component for StepperMotorApparatus {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
-        self.stepper_motor.on.store(state.on, Ordering::Relaxed);
-        self.stepper_motor.direction.store(state.direction, Ordering::Relaxed);
+        self.stepper_motor.on.store(state.on, Ordering::Release);
+        self.stepper_motor.direction.store(state.direction, Ordering::Release);
         Ok(())
     }
 
@@ -195,8 +195,8 @@ impl Component for StepperMotorApparatus {
 
     fn get_state(&self) -> Self::State {
         Self::State {
-            on: self.stepper_motor.on.load(Ordering::Relaxed),
-            direction: self.stepper_motor.direction.load(Ordering::Relaxed)
+            on: self.stepper_motor.on.load(Ordering::Acquire),
+            direction: self.stepper_motor.direction.load(Ordering::Acquire)
         };
         Ok(())
     }
