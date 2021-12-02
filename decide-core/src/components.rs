@@ -1,4 +1,4 @@
-use decide_proto::{Component, DecideError, Result};
+use decide_proto::{Component, error::{DecideError, ControllerError}, Result};
 use lights::Lights;
 use prost_types::Any;
 use serde_value::Value;
@@ -57,7 +57,7 @@ macro_rules! impl_component {
                     $(
                         stringify!($component) => Ok(ComponentKind::$component($component::new($component::deserialize_config(config)?))),
                     )*
-                    _ => Err(DecideError::UnknownDriver),
+                    _ => Err(ControllerError::UnknownDriver(driver_name.into()).into()),
                 }
             }
         }

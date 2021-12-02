@@ -2,33 +2,30 @@ use decide_core::ComponentCollection;
 use decide_proto::{decide, GeneralRequest, DECIDE_VERSION};
 use futures::{SinkExt, StreamExt};
 use num_traits::ToPrimitive;
-use tmq::{request, router, Context, Multipart};
 use std::rc::Rc;
+use tmq::{request, router, Context, Multipart};
 
 async fn setup() -> (tokio::task::LocalSet, Rc<Context>) {
     let tasks = tokio::task::LocalSet::new();
     let context = Rc::new(Context::new());
     let task_ctx = context.clone();
-    tasks.spawn_local( async move {
-//        let config = "
-//        house-lights:
-//          driver: Lights
-//          config:
-//            pin: 4"
-//        .as_bytes();
-//        let (mut components, _) = ComponentCollection::from_reader(config).unwrap();
+    tasks.spawn_local(async move {
+        //        let config = "
+        //        house-lights:
+        //          driver: Lights
+        //          config:
+        //            pin: 4"
+        //        .as_bytes();
+        //        let (mut components, _) = ComponentCollection::from_reader(config).unwrap();
 
+        panic!("oops");
+        let mut sock = router(&task_ctx).bind("tcp://127.0.0.1:7897").unwrap();
 
-    panic!("oops");
-    let mut sock = router(&task_ctx)
-        .bind("tcp://127.0.0.1:7897")
-        .unwrap();
-
-    while let Some(request) = sock.next().await {
-        let request = request.unwrap();
-        //let reply = components.dispatch(request).await;
-        sock.send(request).await.expect("failed to send");
-    }
+        while let Some(request) = sock.next().await {
+            let request = request.unwrap();
+            //let reply = components.dispatch(request).await;
+            sock.send(request).await.expect("failed to send");
+        }
     });
     (tasks, context)
 }
@@ -36,7 +33,6 @@ async fn setup() -> (tokio::task::LocalSet, Rc<Context>) {
 //#[tokio::test]
 async fn request_lock() {
     console_subscriber::init();
-
 
     let (tasks, context): (_, Rc<Context>) = setup().await;
 
@@ -58,16 +54,17 @@ async fn basic() {
 
     let mut runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build().unwrap();
+        .build()
+        .unwrap();
     let tasks = tokio::task::LocalSet::new();
 
     let router_task = {
         let ctx = ctx.clone();
         let endpoint = endpoint.clone();
         tasks.spawn_local(async move {
-                let (mut router_tx, mut router_rx) = router(&ctx).bind(&endpoint).unwrap().split();
-                let request = router_rx.next().await.unwrap().unwrap();
-                router_tx.send(request).await.unwrap();
+            let (mut router_tx, mut router_rx) = router(&ctx).bind(&endpoint).unwrap().split();
+            let request = router_rx.next().await.unwrap().unwrap();
+            router_tx.send(request).await.unwrap();
         })
     };
 
@@ -86,12 +83,11 @@ async fn basic() {
     request_task.await.unwrap();
 }
 
-use zmq::{SocketType};
+use zmq::SocketType;
 
-use tmq::{Result};
-use utils::{generate_tcp_address, msg, sync_echo};
 use std::thread::{spawn, JoinHandle};
-
+use tmq::Result;
+use utils::{generate_tcp_address, msg, sync_echo};
 
 mod utils;
 
@@ -179,7 +175,7 @@ pub fn start_decide(address: String, count: u32) -> JoinHandle<()> {
           driver: Lights
           config:
             pin: 4"
-        .as_bytes();
+            .as_bytes();
         let (mut components, _) = ComponentCollection::from_reader(config).unwrap();
         for _ in 0..count {
             let received = socket.recv_multipart(0).unwrap();
