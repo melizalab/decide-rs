@@ -1,13 +1,12 @@
 use decide_proto::{
     decide, ComponentName,
     ComponentRequest::{self, *},
-    DecideError,
+    error::{ClientError, ControllerError},
     GeneralRequest::{self, *},
     Request, RequestType, Result,
 };
 use directories::ProjectDirs;
 use futures::{stream, Stream, StreamExt};
-use generic_array::{typenum::U32, GenericArray};
 use prost::Message;
 use prost_types::Any;
 use prost_types::Timestamp;
@@ -29,7 +28,7 @@ type RequestBundle = ((ComponentRequest, Vec<u8>), oneshot::Sender<decide::Reply
 pub struct ComponentCollection {
     components: HashMap<ComponentName, mpsc::Sender<RequestBundle>>,
     locked: bool,
-    config_id: GenericArray<u8, U32>,
+    config_id: String,
 }
 
 #[derive(Deserialize)]
@@ -44,10 +43,13 @@ struct ComponentsConfigItem {
 impl ComponentCollection {
     pub fn new() -> Result<(Self, impl Stream<Item = decide::Pub>)> {
         let config_file = ProjectDirs::from("org", "meliza", "decide")
-            .ok_or_else(|| DecideError::NoConfigDir)?
+            .ok_or_else(|| ControllerError::NoConfigDir)?
             .config_dir()
             .join("components.yml");
-        let reader = File::open(&config_file).map_err(|_| DecideError::ConfigReadError)?;
+        let reader = File::open(&config_file).map_err(|e| ControllerError::ConfigReadError{
+            path: Some(config_file),
+            source: e
+        })?;
         Self::from_reader(reader)
     }
 
@@ -57,9 +59,13 @@ impl ComponentCollection {
         let mut file_buf: Vec<u8> = Vec::new();
         config_reader
             .read_to_end(&mut file_buf)
-            .map_err(|_| DecideError::ConfigReadError)?;
-        let components_config: ComponentsConfig = serde_yaml::from_slice(&file_buf[..])?;
+            .map_err(|e| ControllerError::ConfigReadError {
+                path: None,
+                source: e
+            })?;
+        let components_config: ComponentsConfig = serde_yaml::from_slice(&file_buf[..]).map_err(|e| ControllerError::from(e))?;
         let config_id = Sha3_256::new().chain(&file_buf).finalize();
+        let config_id = format!("{:?}", config_id.as_slice());
         let (components, state_stream): (_, HashMap<_, _>) =
             components_config.0.into_iter().map(init_component).unzip();
         let pub_stream = build_pub_stream(state_stream);
@@ -97,7 +103,7 @@ impl ComponentCollection {
         payload: Vec<u8>,
     ) -> Result<decide::Reply> {
         Ok(match request_type {
-            RequestLock => self.request_lock(decide::Config::decode(&*payload)?)?,
+            RequestLock => self.request_lock(decide::Config::decode(&*payload).map_err(|e| ClientError::from(e))?)?,
             ReleaseLock => self.release_lock()?,
         }
         .into())
@@ -108,23 +114,27 @@ impl ComponentCollection {
         request_type: ComponentRequest,
         mut request: Request,
     ) -> Result<decide::Reply> {
+        let component_name = request.component.take().unwrap();
         let component_tx = self
             .components
-            .get_mut(&request.component.take().unwrap())
-            .ok_or_else(|| DecideError::UnknownComponent)?;
+            .get_mut(&component_name)
+            .ok_or_else(|| ClientError::UnknownComponent(component_name))?;
         let (reply_tx, reply_rx) = oneshot::channel();
         component_tx
             .send(((request_type, request.body), reply_tx))
             .await
             .expect("could not talk over mpsc");
-        Ok(reply_rx.await?)
+        Ok(reply_rx.await.map_err(|e| ControllerError::from(e))?)
     }
 
     fn request_lock(&mut self, config: decide::Config) -> Result<decide::reply::Result> {
         if self.locked {
-            Err(DecideError::AlreadyLocked)
-        } else if format!("{:?}", self.config_id.as_slice()) != config.identifier {
-            Err(DecideError::ConfigIdMismatch)
+            Err(ClientError::AlreadyLocked.into())
+        } else if self.config_id != config.identifier {
+            Err(ClientError::ConfigIdMismatch {
+                client: config.identifier,
+                controller: self.config_id.clone(),
+            }.into())
         } else {
             self.locked = true;
             Ok(decide::reply::Result::Ok(()))
@@ -144,9 +154,9 @@ fn execute(
 ) -> Result<decide::Reply> {
     Ok(match request_type {
         ChangeState => {
-            let state_change = decide::StateChange::decode(&*payload)?;
+            let state_change = decide::StateChange::decode(&*payload).map_err(|e| ClientError::from(e))?;
             component
-                .decode_and_change_state(state_change.state.ok_or_else(|| DecideError::NoState)?)?;
+                .decode_and_change_state(state_change.state.ok_or_else(|| ClientError::NoState)?)?;
             decide::reply::Result::Ok(())
         }
         ResetState => {
@@ -154,9 +164,9 @@ fn execute(
             decide::reply::Result::Ok(())
         }
         SetParameters => {
-            let params = decide::ComponentParams::decode(&*payload)?;
+            let params = decide::ComponentParams::decode(&*payload).map_err(|e| ClientError::from(e))?;
             component.decode_and_set_parameters(
-                params.parameters.ok_or_else(|| DecideError::NoParameters)?,
+                params.parameters.ok_or_else(|| ClientError::NoParameters)?,
             )?;
             decide::reply::Result::Ok(())
         }

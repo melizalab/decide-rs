@@ -200,6 +200,7 @@ dependencies = [
 name = "decide-proto"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes 0.4.12",
  "num-derive",

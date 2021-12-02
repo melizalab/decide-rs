@@ -1,15 +1,14 @@
 use async_trait::async_trait;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
-use prost::{DecodeError, Message as ProstMessage};
+use prost::Message as ProstMessage;
 use prost_types::Any;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_value::{DeserializerError, Value, ValueDeserializer};
-use serde_yaml::Error as YamlError;
 use std::convert::TryFrom;
-use thiserror::Error;
 use tmq::Multipart;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use error::{DecideError, ClientError, ControllerError};
 
 pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
 
@@ -52,7 +51,7 @@ impl TryFrom<u8> for RequestType {
         ComponentRequest::from_u8(n)
             .map(Component)
             .or(GeneralRequest::from_u8(n).map(General))
-            .ok_or_else(|| DecideError::InvalidRequestType)
+            .ok_or_else(|| ClientError::InvalidRequestType(n).into())
     }
 }
 
@@ -87,7 +86,7 @@ pub trait Component {
     fn deserialize_config(config: Value) -> Result<Self::Config> {
         let deserializer: ValueDeserializer<DeserializerError> = ValueDeserializer::new(config);
         let config = Self::Config::deserialize(deserializer)
-            .map_err(|_| DecideError::ConfigDeserializationError)?;
+            .map_err(|e| ControllerError::ConfigDeserializationError { source: e } )?;
         Ok(config)
     }
     fn get_encoded_parameters(&self) -> Any {
@@ -107,15 +106,21 @@ pub trait Component {
     }
     fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
         if message.type_url != Self::STATE_TYPE_URL {
-            return Err(DecideError::WrongAnyProtoType);
+            return Err(ClientError::WrongAnyProtoType{
+                actual: message.type_url,
+                expected: Self::STATE_TYPE_URL.into(),
+            }.into());
         }
-        self.change_state(Self::State::decode(&*message.value)?)
+        self.change_state(Self::State::decode(&*message.value).map_err(ClientError::MessageDecodingError)?)
     }
     fn decode_and_set_parameters(&mut self, message: Any) -> Result<()> {
         if message.type_url != Self::PARAMS_TYPE_URL {
-            return Err(DecideError::WrongAnyProtoType);
+            return Err(ClientError::WrongAnyProtoType {
+                actual: message.type_url,
+                expected: Self::PARAMS_TYPE_URL.into(),
+            }.into());
         }
-        self.set_parameters(Self::Params::decode(&*message.value)?)
+        self.set_parameters(Self::Params::decode(&*message.value).map_err(ClientError::MessageDecodingError)?)
     }
 }
 
@@ -154,11 +159,11 @@ impl TryFrom<Multipart> for Request {
 
     fn try_from(mut zmq_message: Multipart) -> core::result::Result<Self, Self::Error> {
         if zmq_message.len() < 3 {
-            return Err(DecideError::BadMultipartLen);
+            return Err(ClientError::BadMultipartLen(zmq_message.len()).into());
         }
         let version = zmq_message.pop_front().unwrap().to_vec();
         if version.as_slice() != DECIDE_VERSION {
-            return Err(DecideError::IncompatibleVersion);
+            return Err(ClientError::IncompatibleVersion(version).into());
         }
         let request_type = (*zmq_message.pop_front().unwrap())[0];
         let request_type = RequestType::try_from(request_type)?;
@@ -168,9 +173,9 @@ impl TryFrom<Multipart> for Request {
             Component(_) => Some(
                 zmq_message
                     .pop_front()
-                    .ok_or_else(|| DecideError::BadMultipartLen)?
+                    .ok_or_else(|| ClientError::BadMultipartLen(zmq_message.len()))?
                     .as_str()
-                    .ok_or_else(|| DecideError::InvalidComponent)?
+                    .ok_or_else(|| ClientError::InvalidComponent)?
                     .into(),
             ),
         };
@@ -194,46 +199,89 @@ impl From<decide::Pub> for Multipart {
     }
 }
 
+pub mod error {
+    use thiserror::Error;
+    use serde_yaml::Error as YamlError;
+    use prost::DecodeError;
+    use tokio::sync::oneshot;
+    use serde_value::DeserializerError;
+    use super::ComponentName;
+
+    #[derive(Error, Debug)]
+    pub enum DecideError {
+        #[error("error in client behavior")]
+        Client {
+            #[from]
+            source: ClientError,
+        },
+        #[error("error in component")]
+        Component {
+            #[from]
+            source: anyhow::Error
+        },
+        #[error("error in controller")]
+        Controller {
+            #[from]
+            source: ControllerError,
+        },
+    }
+
 #[derive(Error, Debug)]
-pub enum DecideError {
-    #[error("The provided state is invalid for this component")]
-    InvalidState,
-    #[error("The provided parameters are invalid for this component")]
-    InvalidParams,
-    #[error("Could not decode version string with UTF8")]
-    InvalidVersion,
-    #[error("Could not decode component string with UTF8")]
-    InvalidComponent,
-    #[error("Unrecognized request type")]
-    InvalidRequestType,
-    #[error("Could not decode message")]
-    MessageDecodingError(#[from] DecodeError),
-    #[error("Unrecognized component identifier")]
-    UnknownComponent,
-    #[error("Unrecognized component driver name")]
-    UnknownDriver,
-    #[error("Controller is already locked")]
-    AlreadyLocked,
-    #[error("No state message provided")]
-    NoState,
-    #[error("No parameters message provided")]
-    NoParameters,
-    #[error("Could not find config directory")]
-    NoConfigDir,
-    #[error("Could not open config file")]
-    ConfigReadError,
-    #[error("Could not parse yaml")]
-    YamlParseError(#[from] YamlError),
-    #[error("This component was given a protobuf of the wrong type")]
-    WrongAnyProtoType,
-    #[error("Wrong number of zmq frames")]
-    BadMultipartLen,
-    #[error("The given message specified a version that this controller does not support")]
-    IncompatibleVersion,
-    #[error("Component is unable to provide a reply")]
-    OneshotRecvDropped(#[from] oneshot::error::RecvError),
-    #[error("Could not deserialize config")]
-    ConfigDeserializationError,
-    #[error("The provided config identifier does not match the config of the controller")]
-    ConfigIdMismatch,
+    pub enum ClientError {
+        #[error("the provided state is invalid for this component")]
+        InvalidState,
+        #[error("the provided parameters are invalid for this component")]
+        InvalidParams,
+        #[error("could not decode version string with UTF8")]
+        InvalidVersion,
+        #[error("could not decode component string with UTF8")]
+        InvalidComponent,
+        #[error("unrecognized request type: {0}")]
+        InvalidRequestType(u8),
+        #[error("could not decode message")]
+        MessageDecodingError(#[from] DecodeError),
+        #[error("unrecognized component identifier `{0:?}`")]
+        UnknownComponent(ComponentName),
+        #[error("controller is already locked")]
+        AlreadyLocked,
+        #[error("the provided config identifier `{client}` does not match the config of the controller `{controller}`")]
+        ConfigIdMismatch {
+            client: String,
+            controller: String,
+        },
+        #[error("no state message provided")]
+        NoState,
+        #[error("no parameters message provided")]
+        NoParameters,
+        #[error("wrong number of zmq frames: {0}")]
+        BadMultipartLen(usize),
+        #[error("this controller does not support protcol version `{0:?}`")]
+        IncompatibleVersion(Vec<u8>),
+        #[error("`Any` protobuf type mismatch: found {actual}, expected {expected}")]
+        WrongAnyProtoType{
+            actual: String,
+            expected: String
+        },
+    }
+
+#[derive(Error, Debug)]
+    pub enum ControllerError {
+        #[error("could not determine config directory")]
+        NoConfigDir,
+        #[error("could not open config file `{path:?}`")]
+        ConfigReadError {
+            path: Option<std::path::PathBuf>,
+            source: std::io::Error,
+        },
+        #[error("could not parse yaml")]
+        YamlParseError(#[from] YamlError),
+        #[error("component is unable to provide a reply")]
+        OneshotRecvDropped(#[from] oneshot::error::RecvError),
+        #[error("could not deserialize config")]
+        ConfigDeserializationError {
+            source: DeserializerError,
+        },
+        #[error("unrecognized component driver name `{0}`")]
+        UnknownDriver(String),
+    }
 }

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use decide_proto::{Component, DecideError};
+use decide_proto::{Component, error::DecideError};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
