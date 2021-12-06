@@ -22,6 +22,10 @@ use thiserror;
 use futures::{pin_mut, Stream, StreamExt};
 use log::{info, trace, warn};
 
+pub mod stepper_motor {
+    include!(concat!(env!("OUT_DIR"), "/_.rs"));
+}
+
 struct LinesVal([u8; 2]);
 struct StepperMotorApparatus {
     stepper_motor: StepperMotor
@@ -161,20 +165,54 @@ impl Component for StepperMotorApparatus {
                     event = handle_14.next() => {
                         trace!("Switch 14 pushed");
                         match event.unwrap().unwrap().event_type() {
-                            EventType::RisingEdge => {on.store(false, Ordering::Release)}
+                            EventType::RisingEdge => {
+                                let state = Self::State {
+                                    on: false
+                                    direction: false //shouldn't matter either way, but may cause bugs
+                                };
+                                let message = Any {
+                                    value: state.encode_to_vec(),
+                                    type_url: Self::STATE_TYPE_URL.into(),
+                                };
+                                state_sender.send(message).await.unwrap();
+                            }
                             EventType::FallingEdge => {
-                                on.store(true, Ordering::Release);
-                                direction.store(false, Ordering::Release);
+                                let state = Self::State {
+                                    on: true
+                                    direction: false
+                                };
+                                let message = Any {
+                                    value: state.encode_to_vec(),
+                                    type_url: Self::STATE_TYPE_URL.into(),
+                                };
+                                state_sender.send(message).await.unwrap();
                             }
                         }
                     }
                     event = handle_15.next() => {
                         trace!("Switch 15 pushed");
                         match event.unwrap().unwrap().event_type() {
-                            EventType::RisingEdge => {on.store(false, Ordering::Release)}
+                            EventType::RisingEdge => {
+                                let state = Self::State {
+                                    on: false
+                                    direction: false //shouldn't matter either way, but may cause bugs
+                                };
+                                let message = Any {
+                                    value: state.encode_to_vec(),
+                                    type_url: Self::STATE_TYPE_URL.into(),
+                                };
+                                state_sender.send(message).await.unwrap();
+                            }
                             EventType::FallingEdge => {
-                                on.store(true, Ordering::Release);
-                                direction.store(true, Ordering::Release);
+                                let state = Self::State {
+                                    on: true
+                                    direction: true
+                                };
+                                let message = Any {
+                                    value: state.encode_to_vec(),
+                                    type_url: Self::STATE_TYPE_URL.into(),
+                                };
+                                state_sender.send(message).await.unwrap();
                             }
                         }
                     }

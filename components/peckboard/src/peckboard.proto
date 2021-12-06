@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+message Led_State {
+  string led_state = 1;
+}
+
+message Led_Params {
+
+}
+
+message Key_State {
+
+}
+
+message Key_Params {
+
+}

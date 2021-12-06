@@ -21,6 +21,10 @@ use std::fs::OpenOptions;
 use std::io::{self,prelude::*,Write, Read};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
 
+pub mod house_light {
+    include!(concat!(env!("OUT_DIR"), "/_.rs"));
+}
+
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
@@ -137,3 +141,4 @@ struct Config {
     latitude: f64,
     longitude: f64,
 }
+
