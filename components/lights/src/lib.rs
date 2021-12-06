@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use decide_proto::{Component, error::DecideError};
+use decide_proto::{Component, DecideError};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
@@ -43,7 +43,7 @@ impl Component for Lights {
         }
     }
 
-    async fn init(&self, _config: Self::Config,sender: mpsc::Sender<Any>) {
+    async fn init(&self, config: Self::Config,sender: mpsc::Sender<Any>) {
         let blink = self.blink.clone();
         let on = self.on.clone();
         tokio::spawn(async move {
