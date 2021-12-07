@@ -9,7 +9,9 @@ message Led_Params {
 }
 
 message Key_State {
-
+  bool peck_left = 1;
+  bool peck_center = 2;
+  bool peck_right = 3;
 }
 
 message Key_Params {
