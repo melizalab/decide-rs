@@ -65,3 +65,7 @@ macro_rules! impl_component {
 }
 
 impl_component!(Lights);
+impl_component!(HouseLight);
+impl_component!(StepperMotorApparatus);
+impl_component!(PeckLeds);
+impl_component!(PeckKeys);

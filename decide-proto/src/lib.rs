@@ -164,7 +164,7 @@ impl TryFrom<Multipart> for Request {
         let request_type = (*zmq_message.pop_front().unwrap())[0];
         let request_type = RequestType::try_from(request_type)?;
         let body = zmq_message.pop_front().unwrap().to_vec();
-        let componentuse = match request_type {
+        let component = match request_type {
             General(_) => None,
             Component(_) => Some(
                 zmq_message
@@ -237,53 +237,4 @@ pub enum DecideError {
     ConfigDeserializationError,
     #[error("The provided config identifier does not match the config of the controller")]
     ConfigIdMismatch,
-}
-
-#[derive(Error, Debug)]
-pub enum DecideGpioError {
-    #[error("Failed to get chip {chip:?}")]
-    ChipError {
-        source: GpioError,
-        chip: ChipNumber,
-    },
-    #[error("Failed to get line")]
-    LineGetError {
-        source: GpioError,
-        line: u32,
-    },
-    #[error("Failed to request line")]
-    LineReqError {
-        //source: GpioError,#[derive(Error, Debug)]
-        line: u32,
-    },
-    #[error("Failed to request event handle for line")]
-    LineReqEvtError {
-        //source: GpioError,
-        line: u32,
-    },
-    #[error("Failed to get lines")]
-    LinesGetError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
-    },
-    #[error("Failed to request lines")]
-    LinesReqError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
-    },
-    #[error("Failed to set lines")]
-    LinesSetError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
-    },
-    #[error("Failed to request async event handle")]
-    AsyncLineReqError {
-        //source: GpioError,
-        line: u32,
-    },
-    #[error("Failed to monitor switch lines")]
-    SwitchMonitorError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
-    }
 }
