@@ -1,5 +1,5 @@
 use std::os::unix::raw::dev_t;
-use decide_proto::{Component, DecideError, DecideGpioError as Error};
+use decide_proto::{Component, DecideError};
 use prost::Message;
 use prost_types::Any;
 
@@ -51,17 +51,21 @@ impl StepperMotor {
             direction: Arc::new(AtomicBool::new(false))
         }
     }
-    fn init(&self, chip1: &mut Chip, chip3: &mut Chip, motor1_offsets: [u32; 2], motor3_offsets: [u32; 2], dt: u64) -> Result<(), Error> {
+    fn init(&self, chip1: &mut Chip, chip3: &mut Chip, motor1_offsets: [u32; 2], motor3_offsets: [u32; 2], dt: u64) -> Result<(), E> {
         let motor_1_handle = chip1
             .get_lines(&motor1_offsets.0)
-            .map_err(|e: GpioError| Error::LinesGetError { lines: &motor1_offsets })?
+            .unwrap()
+            //.map_err(|e: GpioError| Error::LinesGetError { lines: &motor1_offsets })?
             .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper")
-            .map_err(|e: GpioError| Error::LinesReqError { lines: &motor1_offsets })?;
+            .unwrap();
+            //.map_err(|e: GpioError| Error::LinesReqError { lines: &motor1_offsets })?;
         let motor_3_handle = chip3
             .get_lines(&motor3_offsets.0)
-            .map_err(|e: GpioError| Error::LinesGetError { lines: &motor3_offsets })?
+            .unwrap()
+            //.map_err(|e: GpioError| Error::LinesGetError { lines: &motor3_offsets })?
             .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper")
-            .map_err(|e: GpioError| Error::LinesReqError { lines: &motor3_offsets })?;
+            .unwrap();
+            //.map_err(|e: GpioError| Error::LinesReqError { lines: &motor3_offsets })?;
 
         let on = &self.on.clone();
         let direction = &self.direction.clone();
@@ -69,10 +73,10 @@ impl StepperMotor {
         let _motor_thread = thread::spawn(move || { //TODO: switch to tokio::spawn thread macro instead of thread::spawn
             let mut step: usize = 0;
             motor_1_handle.set_values(&Self::ALL_OFF.0)
-                .map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
+                //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
                 .unwrap();
             motor_3_handle.set_values(&Self::ALL_OFF.0)
-                .map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
+                //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
                 .unwrap();
             loop {
                 match on.load(Ordering::Relaxed) {
@@ -82,29 +86,35 @@ impl StepperMotor {
                                 step = (step + 1) % Self::NUM_HALF_STEPS;
                                 let step_1_values = &Self::HALF_STEPS[step].0;
                                 let step_3_values = &Self::HALF_STEPS[step].1;
-                                motor_1_handle.set_values(&step_1_values.0).map_err(|e: GpioError|
-                                    Error::LinesSetError { lines: &motor1_offsets }).unwrap();
-                                motor_3_handle.set_values(&step_3_values.0).map_err(|e: GpioError|
-                                    Error::LinesSetError { lines: &motor3_offsets }).unwrap();
+                                motor_1_handle.set_values(&step_1_values.0)
+                                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
+                                    .unwrap();
+                                motor_3_handle.set_values(&step_3_values.0)
+                                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
+                                    .unwrap();
                             }
                             false => {
                                 step = (step - 1) % Self::NUM_HALF_STEPS;
                                 let step_1_values = &Self::HALF_STEPS[step].0;
                                 let step_3_values = &Self::HALF_STEPS[step].1;
-                                motor_1_handle.set_values(&step_1_values.0).map_err(|e: GpioError|
-                                    Error::LinesSetError { lines: &motor1_offsets }).unwrap();
-                                motor_3_handle.set_values(&step_3_values.0).map_err(|e: GpioError|
-                                    Error::LinesSetError { lines: &motor3_offsets }).unwrap();
+                                motor_1_handle.set_values(&step_1_values.0)
+                                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
+                                    .unwrap();
+                                motor_3_handle.set_values(&step_3_values.0)
+                                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
+                                    .unwrap();
                             }
                         }
                     }
                     false => {
                         let step_1_values = &Self::ALL_OFF;
                         let step_3_values = &Self::ALL_OFF;
-                        motor_1_handle.set_values(&step_1_values.0).map_err(|e: GpioError|
-                            Error::LinesSetError { lines: &motor1_offsets }).unwrap();
-                        motor_3_handle.set_values(&step_3_values.0).map_err(|e: GpioError|
-                            Error::LinesSetError { lines: &motor3_offsets }).unwrap();
+                        motor_1_handle.set_values(&step_1_values.0)
+                            //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
+                            .unwrap();
+                        motor_3_handle.set_values(&step_3_values.0)
+                            //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
+                            .unwrap();
                     }
                 };
                 thread::sleep(Duration::from_micros(dt));
@@ -128,10 +138,12 @@ impl Component for StepperMotorApparatus {
     }
 
     fn init(&self, config: Self::Config, state_sender: Sender<Any>) {
-        let mut chip1 = Chip::new(config.chip1).map_err( |e:GpioError|
-            Error::ChipError { source: e, chip: ChipNumber::Chip1})?;
-        let mut chip3 = Chip::new(chip3).map_err( |e:GpioError|
-            Error::ChipError {source: e, chip: ChipNumber::Chip3})?;
+        let mut chip1 = Chip::new(config.chip1)
+            .unwrap();
+            //.map_err( |e:GpioError| Error::ChipError { source: e, chip: ChipNumber::Chip1})?;
+        let mut chip3 = Chip::new(chip3)
+            .unwrap();
+            //.map_err( |e:GpioError| Error::ChipError {source: e, chip: ChipNumber::Chip3})?;
         self.stepper_motor.init(&mut chip1, &mut chip3, config.motor1_offsets, config.motor3_offsets, config.dt).unwrap();
         let on = &self.stepper_motor.on.clone();
         let direction = &self.stepper_motor.direction.clone();
@@ -139,22 +151,28 @@ impl Component for StepperMotorApparatus {
         tokio::spawn(async move {
             //init switch lines
             let line_14 = chip1.get_line(14)
-                .map_err(|e:GpioError| Error::LineGetError {source:e, line: 14}).unwrap();
+                //.map_err(|e:GpioError| Error::LineGetError {source:e, line: 14})
+                .unwrap();
             let handle_14 = AsyncLineEventHandle::new(line_14.events(
                 LineRequestFlags::INPUT,
                 EventRequestFlags::BOTH_EDGES,
                 "stepper_motor_switch"
-            ).map_err(|e: GpioError| Error::LineReqEvtError {line: 14}).unwrap())
-                .map_err(|e: GpioError| Error::AsyncLineReqError {line: 14}).unwrap();
+            )//.map_err(|e: GpioError| Error::LineReqEvtError {line: 14})
+                .unwrap())
+                //.map_err(|e: GpioError| Error::AsyncLineReqError {line: 14})
+                .unwrap();
 
             let line_15 = chip1.get_line(15)
-                .map_err(|e:GpioError| Error::LineGetError {source:e, line: 15}).unwrap();
+                //.map_err(|e:GpioError| Error::LineGetError {source:e, line: 15})
+                .unwrap();
             let handle_15 = AsyncLineEventHandle::new(line_15.events(
                 LineRequestFlags::INPUT,
                 EventRequestFlags::BOTH_EDGES,
                 "stepper_motor_switch"
-            ).map_err(|e: GpioError| Error::LineReqEvtError {line: 15}).unwrap())
-                .map_err(|e: GpioError| Error::AsyncLineReqError {line: 15}).unwrap();
+            )//.map_err(|e: GpioError| Error::LineReqEvtError {line: 15})
+                .unwrap())
+                //.map_err(|e: GpioError| Error::AsyncLineReqError {line: 15})
+                .unwrap();
 
             loop {
                 tokio::select! {
