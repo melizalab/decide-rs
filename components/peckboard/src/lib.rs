@@ -1,19 +1,31 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8};
 use gpio_cdev::{Chip, AsyncLineEventHandle,
                 LineRequestFlags,
                 LineHandle, MultiLineHandle,
                 EventRequestFlags, EventType,
                 errors::Error as GpioError};
 use futures::stream::StreamExt;
-use prost_types::Any;
-use tokio::*;
 use thiserror;
 use tokio::sync::mpsc::Sender;
-use decide_proto::Component;
+use async_trait::async_trait;
+use decide_proto::{Component, DecideError};
+use prost::Message;
+use prost_types::Any;
+use serde::Deserialize;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tokio::{
+    self,
+    sync::mpsc,
+    time::{sleep, Duration},
+};
 
 
-pub mod peckboard {
+pub mod keys {
+    include!(concat!(env!("OUT_DIR"), "/_.rs"));
+}
+pub mod leds {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
@@ -29,8 +41,10 @@ struct PeckKeys {
 
 #[async_trait]
 impl Component for PeckLeds {
-    type State = peckboard::leds::State;
-    type Params = peckboard::leds::Params;
+    type State = //peckboard::
+    leds::State;
+    type Params = //peckboard::
+    leds::Params;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/led_state";
     const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_state";
@@ -51,11 +65,11 @@ impl Component for PeckLeds {
 
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
         match state.led_state {
-            "off" => {*self.led_state = LedState::Off}
-            "red" => {*self.led_state = LedState::Red}
-            "blue" => {*self.led_state = LedState::Blue}
-            "green" => {*self.led_state = LedState::Green}
-            "white" => {*self.led_state = LedState::White}
+            "off" => {self.led_state = LedState::Off}
+            "red" => {self.led_state = LedState::Red}
+            "blue" => {self.led_state = LedState::Blue}
+            "green" => {self.led_state = LedState::Green}
+            "white" => {self.led_state = LedState::White}
             _ => {} //throw warning
         }
         let lines_value = self.led_state.as_value();
@@ -86,10 +100,12 @@ impl Component for PeckLeds {
 
 #[async_trait]
 impl Component for PeckKeys {
-    type State = peckboard::keys::State;
-    type Params = peckboard::keys::Params;
+    type State = //peckboard::
+    keys::State;
+    type Params = //peckboard::
+    keys::Params;
     type Config = Config;
-    const STATE_TYPE_URL: &'static str = "";
+    const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
     const PARAMS_TYPE_URL: &'static str = "";
 
     fn new(config: Self::Config) -> Self {
@@ -129,9 +145,9 @@ impl Component for PeckKeys {
                         } //no need to match if state is update with ANY event
                         let values = key_handles.get_values().unwrap();
                         let state = Self::State {
-                            peck_left: values.0 != 0, //wonky
-                            peck_center: values.1 != 0,
-                            peck_right: values.2 != 0,
+                            peck_left: values[0] != 0, //wonky
+                            peck_center: values[1] != 0,
+                            peck_right: values[2] != 0,
                         };
                         let message = Any {
                             value: state.encode_to_vec(),
@@ -139,7 +155,7 @@ impl Component for PeckKeys {
                         };
                         state_sender.send(message).await.unwrap();
                     }
-                    None => break,
+                    None => continue,
                 }
             }
         });
@@ -167,9 +183,7 @@ struct Config {
     interrupt_chip: String,
     interrupt_offset: u32,
     peckboard_chip: String,
-    left_leds: Vec<u32>,
-    right_leds: Vec<u32>,
-    center_leds: Vec<u32>,
+    led_offsets: Vec<u32>,
     ir_offsets: Vec<u32>,
     key_offsets: Vec<u32>,
 }
