@@ -2,7 +2,8 @@ use gpio_cdev::{Chip, AsyncLineEventHandle,
                 LineRequestFlags,
                 MultiLineHandle,
                 EventRequestFlags, EventType,
-                errors::Error as GpioError};
+                //errors::Error as GpioError
+};
 use futures::stream::StreamExt;
 use tokio::sync::mpsc::Sender;
 use async_trait::async_trait;
@@ -13,19 +14,16 @@ use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool,// Ordering
+    },
     Arc,
 };
 use tokio::{
     self,
-    time::{sleep, Duration},
+    //time::{sleep, Duration},
 };
 
-
-pub mod keys {
-    include!(concat!(env!("OUT_DIR"), "/_.rs"));
-}
-pub mod leds {
+pub mod peckboard {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
@@ -41,10 +39,8 @@ struct PeckKeys {
 
 #[async_trait]
 impl Component for PeckLeds {
-    type State = //peckboard::
-    leds::State;
-    type Params = //peckboard::
-    leds::Params;
+    type State = peckboard::Led_State;
+    type Params = peckboard::Led_Params;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/led_state";
     const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_state";
@@ -100,10 +96,8 @@ impl Component for PeckLeds {
 
 #[async_trait]
 impl Component for PeckKeys {
-    type State = //peckboard::
-    keys::State;
-    type Params = //peckboard::
-    keys::Params;
+    type State = peckboard::Key_State;
+    type Params = peckboard::Key_Params;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
     const PARAMS_TYPE_URL: &'static str = "";
