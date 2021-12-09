@@ -19,10 +19,14 @@ use sun;
 
 use std::fs::OpenOptions;
 use std::io::{//self,prelude::*,
-              Write, Read};
+              Write};
 use std::sync::atomic::{AtomicU32, AtomicU8};
 
-pub struct HouseLight {
+pub mod house_light {
+    include!(concat!(env!("OUT_DIR"), "/_.rs"));
+}
+
+struct HouseLight {
     switch: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
     brightness: Arc<AtomicU8>,
@@ -37,7 +41,7 @@ impl Component for HouseLight {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
 
-    fn new(config: Self::Config) -> Self {
+    fn new(_config: Self::Config) -> Self {
         HouseLight {
             switch: Arc::new(AtomicBool::new(false)),
             fake_clock: Arc::new(AtomicBool::new(false)),
@@ -57,19 +61,22 @@ impl Component for HouseLight {
                 .write(true)
                 .read(true)
                 .open(config.device_path).unwrap();
+            let dawn = config.fake_dawn;
+            let dusk = config.fake_dusk;
+            let max_brightness = config.max_brightness;
             loop {
                 if switch.load(Ordering::Relaxed) {
                     let ephemera = fake_clock.load(Ordering::Relaxed);
-                    let altitude = calc_altitude(ephemera, &config);
-                    let new_brightness = calc_brightness(altitude, config.max_brightness);
+                    let altitude = HouseLight::calc_altitude(ephemera, dawn, dusk);
+                    let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
                     device.write(&[new_brightness]).unwrap();
 
                     brightness.store(new_brightness, Ordering::Relaxed);
                     let state = Self::State {
                         switch: true,
-                        ephemera,
-                        new_brightness
+                        fake_clock: ephemera,
+                        brightness: new_brightness as i32
                     };
                     let message = Any {
                         value: state.encode_to_vec(),
@@ -77,7 +84,7 @@ impl Component for HouseLight {
                     };
                     state_sender.send(message).await.unwrap();
                 }
-                sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64));
+                sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
             }
         });
     }
@@ -85,12 +92,12 @@ impl Component for HouseLight {
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
         self.switch.store(state.switch, Ordering::Relaxed);
         self.fake_clock.store(state.fake_clock, Ordering::Relaxed);
-        self.brightness.store(state.brightness, Ordering::Relaxed);
+        self.brightness.store(state.brightness as u8, Ordering::Relaxed);
         Ok(())
     }
 
     fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
-        self.interval.store(params.clock_interval, Ordering::Relaxed);
+        self.interval.store(params.clock_interval as u32, Ordering::Relaxed);
         Ok(())
     }
 
@@ -98,37 +105,39 @@ impl Component for HouseLight {
         Self::State {
             switch: self.switch.load(Ordering::Relaxed),
             fake_clock: self.fake_clock.load(Ordering::Relaxed),
-            brightness: self.brightness.load(Ordering::Relaxed),
+            brightness: self.brightness.load(Ordering::Relaxed) as i32,
         }
     }
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params {
-            clock_interval: self.interval.load(Ordering::Relaxed)
+            clock_interval: self.interval.load(Ordering::Relaxed) as i64
         }
     }
 }
 
-fn calc_brightness (altitude: f64, max_brightness: u8) -> u8 {
-    let x = (altitude.sin() * (max_brightness as f64)).round() as u8;
-    //let brightness = max(0.0, x); //trait 'Ord' is not implemented for '{float}'
-    let brightness = if x > 0  {x} else {0};
-    brightness
-}
-fn calc_altitude(fake_clock: bool, config: &Config) -> f64 {
-    let mut altitude: f64 = 0.0;
-    if fake_clock {
-        let now: DateTime<Utc> = DateTime::from(SystemTime::now());
-        let now= (now.hour() + (now.minute() / 60) + (now.second() / 3600)) as f64;
-        let x: f64  = (now + 24.0 - config.fake_dawn) % 24.0;
-        let y: f64 = (config.fake_dusk + 24.0 - now) % 24.0;
-        altitude = (x/y) * 3.14;
-    } else {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        altitude = sun::pos(now.as_millis() as i64,0.0, 0.0)
-            .altitude;
-    };
-    altitude
+impl HouseLight {
+    fn calc_brightness(altitude: f64, max_brightness: u8) -> u8 {
+        let x = (altitude.sin() * (max_brightness as f64)).round() as u8;
+        //let brightness = max(0.0, x); //trait 'Ord' is not implemented for '{float}'
+        let brightness = if x > 0 { x } else { 0 };
+        brightness
+    }
+    fn calc_altitude(fake_clock: bool, dawn: f64, dusk: f64) -> f64 {
+        return if fake_clock {
+            let now: DateTime<Utc> = DateTime::from(SystemTime::now());
+            let now = (now.hour() + (now.minute() / 60) + (now.second() / 3600)) as f64;
+            let x: f64 = (now + 24.0 - dawn) % 24.0;
+            let y: f64 = (dusk + 24.0 - now) % 24.0;
+            let altitude = (x / y) * 3.14;
+            altitude
+        } else {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            let altitude = sun::pos(now.as_millis() as i64, 0.0, 0.0)
+                .altitude;
+            altitude
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -137,6 +146,6 @@ struct Config {
     fake_dawn: f64,
     fake_dusk: f64,
     max_brightness: u8,
-    latitude: f64,
-    longitude: f64,
+    //latitude: f64,
+    //longitude: f64,
 }
