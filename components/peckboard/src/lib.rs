@@ -1,13 +1,14 @@
 use gpio_cdev::{Chip, AsyncLineEventHandle,
                 LineRequestFlags,
-                LineHandle, MultiLineHandle,
+                MultiLineHandle,
                 EventRequestFlags, EventType,
                 errors::Error as GpioError};
 use futures::stream::StreamExt;
-use thiserror;
 use tokio::sync::mpsc::Sender;
 use async_trait::async_trait;
-use decide_proto::{Component, DecideError};
+use decide_proto::{Component,
+                   //error::DecideError
+};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
@@ -17,7 +18,6 @@ use std::sync::{
 };
 use tokio::{
     self,
-    sync::mpsc,
     time::{sleep, Duration},
 };
 

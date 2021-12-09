@@ -1,4 +1,5 @@
-use decide_proto::{Component, DecideError};
+use decide_proto::{Component, //error::DecideError
+};
 use prost::Message;
 use prost_types::Any;
 
@@ -7,19 +8,19 @@ use serde::Deserialize;
 
 use async_trait::async_trait;
 use tokio::{self,
-            sync::mpsc::{self, Sender},
+            sync::mpsc::{Sender},
             time::{sleep, Duration}
 };
 
 use std::time::{SystemTime, UNIX_EPOCH};
-use sun_times;
 use chrono::{self, Utc, DateTime, Timelike};
-use std::cmp::{min,max};
+//use std::cmp::{min,max};
 use sun;
 
 use std::fs::OpenOptions;
-use std::io::{self,prelude::*,Write, Read};
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8};
+use std::io::{//self,prelude::*,
+              Write, Read};
+use std::sync::atomic::{AtomicU32, AtomicU8};
 
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
@@ -45,7 +46,7 @@ impl Component for HouseLight {
         }
     }
 
-    fn init(&self, config: Self::Config, state_sender: Sender<Any>) {
+    async fn init(&self, config: Self::Config, state_sender: Sender<Any>) {
         let switch = self.switch.clone();
         let fake_clock = self.fake_clock.clone();
         let brightness = self.brightness.clone();
@@ -62,7 +63,7 @@ impl Component for HouseLight {
                     let altitude = calc_altitude(ephemera, &config);
                     let new_brightness = calc_brightness(altitude, config.max_brightness);
 
-                    device.write(&[news_brightness]).unwrap();
+                    device.write(&[new_brightness]).unwrap();
 
                     brightness.store(new_brightness, Ordering::Relaxed);
                     let state = Self::State {
@@ -109,17 +110,19 @@ impl Component for HouseLight {
 }
 
 fn calc_brightness (altitude: f64, max_brightness: u8) -> u8 {
-    let brightness = max(0.0,(altitude.sin() * (max_brightness as f64)).round());
-    brightness as u8
+    let x = (altitude.sin() * (max_brightness as f64)).round() as u8;
+    //let brightness = max(0.0, x); //trait 'Ord' is not implemented for '{float}'
+    let brightness = if x > 0  {x} else {0};
+    brightness
 }
-fn calc_altitude(fake_clock: bool, config: &HouseLight::Config) -> f64 {
+fn calc_altitude(fake_clock: bool, config: &Config) -> f64 {
     let mut altitude: f64 = 0.0;
     if fake_clock {
         let now: DateTime<Utc> = DateTime::from(SystemTime::now());
         let now= (now.hour() + (now.minute() / 60) + (now.second() / 3600)) as f64;
-        let x: f64  = (now + 24 - config.fake_dawn) % 24;
-        let y: f64 = (config.fake_dusk + 24 - now) % 24;
-        altitude: f64 = (x/y) * 3.14;
+        let x: f64  = (now + 24.0 - config.fake_dawn) % 24.0;
+        let y: f64 = (config.fake_dusk + 24.0 - now) % 24.0;
+        altitude = (x/y) * 3.14;
     } else {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
         altitude = sun::pos(now.as_millis() as i64,0.0, 0.0)

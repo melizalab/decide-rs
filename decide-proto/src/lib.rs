@@ -9,6 +9,7 @@ use std::convert::TryFrom;
 use tmq::Multipart;
 use tokio::sync::mpsc;
 use error::{DecideError, ClientError, ControllerError};
+//use gpio_cdev::{Error as GpioError};
 
 pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
 
@@ -78,7 +79,7 @@ pub trait Component {
     const PARAMS_TYPE_URL: &'static str;
 
     fn new(config: Self::Config) -> Self;
-    async fn init(&self, state_sender: mpsc::Sender<Any>);
+    async fn init(&self, config: Self::Config, state_sender: mpsc::Sender<Any>);
     fn change_state(&mut self, state: Self::State) -> Result<()>;
     fn set_parameters(&mut self, params: Self::Params) -> Result<()>;
     fn get_state(&self) -> Self::State;
@@ -168,7 +169,7 @@ impl TryFrom<Multipart> for Request {
         let request_type = (*zmq_message.pop_front().unwrap())[0];
         let request_type = RequestType::try_from(request_type)?;
         let body = zmq_message.pop_front().unwrap().to_vec();
-        let componentuse tokio::{time::Duration}; = match request_type {
+        let component = match request_type {
             General(_) => None,
             Component(_) => Some(
                 zmq_message
@@ -226,7 +227,7 @@ pub mod error {
         },
     }
 
-#[derive(Error, Debug)]
+    #[derive(Error, Debug)]
     pub enum ClientError {
         #[error("the provided state is invalid for this component")]
         InvalidState,
@@ -258,13 +259,13 @@ pub mod error {
         #[error("this controller does not support protcol version `{0:?}`")]
         IncompatibleVersion(Vec<u8>),
         #[error("`Any` protobuf type mismatch: found {actual}, expected {expected}")]
-        WrongAnyProtoType{
+        WrongAnyProtoType {
             actual: String,
             expected: String
         },
     }
 
-#[derive(Error, Debug)]
+    #[derive(Error, Debug)]
     pub enum ControllerError {
         #[error("could not determine config directory")]
         NoConfigDir,
@@ -284,53 +285,54 @@ pub mod error {
         #[error("unrecognized component driver name `{0}`")]
         UnknownDriver(String),
     }
-}
 
-#[derive(Error, Debug)]
-pub enum DecideGpioError {
-    #[error("Failed to get chip {chip:?}")]
-    ChipError {
-        source: GpioError,
-        chip: ChipNumber,
-    },
-    #[error("Failed to get line")]
-    LineGetError {
-        source: GpioError,
-        line: u32,
-    },
-    #[error("Failed to request line")]
-    LineReqError {
-        //source: GpioError,#[derive(Error, Debug)]
-        line: u32,
-    },
-    #[error("Failed to request event handle for line")]
-    LineReqEvtError {
-        //source: GpioError,
-        line: u32,
-    },
-    #[error("Failed to get lines")]
-    LinesGetError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
-    },
-    #[error("Failed to request lines")]
-    LinesReqError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
-    },
-    #[error("Failed to set lines")]
-    LinesSetError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
-    },
-    #[error("Failed to request async event handle")]
-    AsyncLineReqError {
-        //source: GpioError,
-        line: u32,
-    },
-    #[error("Failed to monitor switch lines")]
-    SwitchMonitorError {
-        //source: GpioError,
-        lines: &'static [u32; 2],
+    #[derive(Error, Debug)]
+    pub enum DecideGpioError {
+        #[error("Failed to get chip {chip:?}")]
+        ChipError {
+            //source: GpioError,
+            chip: &'static str,
+        },
+        #[error("Failed to get line")]
+        LineGetError {
+            //source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to request line")]
+        LineReqError {
+            //source: GpioError,#[derive(Error, Debug)]
+            line: u32,
+        },
+        #[error("Failed to request event handle for line")]
+        LineReqEvtError {
+            //source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to get lines")]
+        LinesGetError {
+            //source: GpioError,
+            lines: &'static [u32; 2],
+        },
+        #[error("Failed to request lines")]
+        LinesReqError {
+            //source: GpioError,
+            lines: &'static [u32; 2],
+        },
+        #[error("Failed to set lines")]
+        LinesSetError {
+            //source: GpioError,
+            lines: &'static [u32; 2],
+        },
+        #[error("Failed to request async event handle")]
+        AsyncLineReqError {
+            //source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to monitor switch lines")]
+        SwitchMonitorError {
+            //source: GpioError,
+            lines: &'static [u32; 2],
+        },
     }
 }
+
