@@ -1,7 +1,8 @@
 use decide_proto::{
-    decide, ComponentName,
-    ComponentRequest::{self, *},
+    decide,
     error::{ClientError, ControllerError},
+    ComponentName,
+    ComponentRequest::{self, *},
     GeneralRequest::{self, *},
     Request, RequestType, Result,
 };
@@ -20,54 +21,93 @@ use std::{fs::File, io::Read};
 use tmq::Multipart;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::instrument;
 
 mod components;
 use components::ComponentKind;
 
+use anyhow::Context as AnyhowContext;
+use decide_proto::{PUB_ENDPOINT, REQ_ENDPOINT};
+use futures::SinkExt;
+use tmq::{publish, router, Context};
+
+pub async fn launch_decide<S>(
+    mut components: ComponentCollection,
+    mut state_stream: S,
+) -> anyhow::Result<()>
+where
+    S: Stream<Item = decide::Pub> + Unpin + Send + 'static,
+{
+    let mut router_sock = router(&Context::new()).bind(REQ_ENDPOINT)?;
+    let mut publish_sock = publish(&Context::new()).bind(PUB_ENDPOINT)?;
+
+    tokio::spawn(async move {
+        while let Some(state_update) = state_stream.next().await {
+            publish_sock.send(state_update).await.unwrap();
+        }
+    });
+
+    while let Some(request) = router_sock.next().await {
+        let reply = components.dispatch(request?).await;
+        router_sock.send(reply).await.expect("failed to send");
+    }
+    Ok(())
+}
+
 type RequestBundle = ((ComponentRequest, Vec<u8>), oneshot::Sender<decide::Reply>);
+
+#[derive(Debug)]
 pub struct ComponentCollection {
     components: HashMap<ComponentName, mpsc::Sender<RequestBundle>>,
     locked: bool,
     config_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ComponentsConfig(HashMap<ComponentName, ComponentsConfigItem>);
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ComponentsConfigItem {
     driver: String,
     config: Value,
 }
 
 impl ComponentCollection {
-    pub fn new() -> Result<(Self, impl Stream<Item = decide::Pub>)> {
+    #[instrument]
+    pub fn new() -> anyhow::Result<(Self, impl Stream<Item = decide::Pub>)> {
         let config_file = ProjectDirs::from("org", "meliza", "decide")
             .ok_or_else(|| ControllerError::NoConfigDir)?
             .config_dir()
             .join("components.yml");
-        let reader = File::open(&config_file).map_err(|e| ControllerError::ConfigReadError{
+        let reader = File::open(&config_file).map_err(|e| ControllerError::ConfigReadError {
             path: Some(config_file),
-            source: e
+            source: e,
         })?;
         Self::from_reader(reader)
     }
 
     pub fn from_reader<T: Read>(
         mut config_reader: T,
-    ) -> Result<(Self, impl Stream<Item = decide::Pub>)> {
+    ) -> anyhow::Result<(Self, impl Stream<Item = decide::Pub>)> {
         let mut file_buf: Vec<u8> = Vec::new();
         config_reader
             .read_to_end(&mut file_buf)
             .map_err(|e| ControllerError::ConfigReadError {
                 path: None,
-                source: e
+                source: e,
             })?;
-        let components_config: ComponentsConfig = serde_yaml::from_slice(&file_buf[..]).map_err(|e| ControllerError::from(e))?;
+        let components_config: ComponentsConfig =
+            serde_yaml::from_slice(&file_buf[..]).map_err(|e| ControllerError::from(e))?;
         let config_id = Sha3_256::new().chain(&file_buf).finalize();
         let config_id = format!("{:?}", config_id.as_slice());
-        let (components, state_stream): (_, HashMap<_, _>) =
-            components_config.0.into_iter().map(init_component).unzip();
+        let (components, state_stream): (_, HashMap<_, _>) = components_config
+            .0
+            .into_iter()
+            .map(init_component)
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .unzip();
+        tracing::info!("components initialized");
         let pub_stream = build_pub_stream(state_stream);
         Ok((
             ComponentCollection {
@@ -79,6 +119,7 @@ impl ComponentCollection {
         ))
     }
 
+    #[instrument]
     pub async fn dispatch(&mut self, mut request: Multipart) -> Multipart {
         let client_id = request.pop_front().unwrap();
         let empty_frame = request.pop_front().unwrap();
@@ -103,7 +144,9 @@ impl ComponentCollection {
         payload: Vec<u8>,
     ) -> Result<decide::Reply> {
         Ok(match request_type {
-            RequestLock => self.request_lock(decide::Config::decode(&*payload).map_err(|e| ClientError::from(e))?)?,
+            RequestLock => self.request_lock(
+                decide::Config::decode(&*payload).map_err(|e| ClientError::from(e))?,
+            )?,
             ReleaseLock => self.release_lock()?,
         }
         .into())
@@ -134,7 +177,8 @@ impl ComponentCollection {
             Err(ClientError::ConfigIdMismatch {
                 client: config.identifier,
                 controller: self.config_id.clone(),
-            }.into())
+            }
+            .into())
         } else {
             self.locked = true;
             Ok(decide::reply::Result::Ok(()))
@@ -154,7 +198,8 @@ fn execute(
 ) -> Result<decide::Reply> {
     Ok(match request_type {
         ChangeState => {
-            let state_change = decide::StateChange::decode(&*payload).map_err(|e| ClientError::from(e))?;
+            let state_change =
+                decide::StateChange::decode(&*payload).map_err(|e| ClientError::from(e))?;
             component
                 .decode_and_change_state(state_change.state.ok_or_else(|| ClientError::NoState)?)?;
             decide::reply::Result::Ok(())
@@ -164,7 +209,8 @@ fn execute(
             decide::reply::Result::Ok(())
         }
         SetParameters => {
-            let params = decide::ComponentParams::decode(&*payload).map_err(|e| ClientError::from(e))?;
+            let params =
+                decide::ComponentParams::decode(&*payload).map_err(|e| ClientError::from(e))?;
             component.decode_and_set_parameters(
                 params.parameters.ok_or_else(|| ClientError::NoParameters)?,
             )?;
@@ -199,17 +245,21 @@ where
     })
 }
 
+#[instrument]
 fn init_component(
     (name, item): (ComponentName, ComponentsConfigItem),
-) -> (
+) -> anyhow::Result<(
     (ComponentName, mpsc::Sender<RequestBundle>),
     (ComponentName, ReceiverStream<Any>),
-) {
+)> {
     let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
     let (state_tx, state_rx) = mpsc::channel::<Any>(100);
-    let mut component = ComponentKind::try_from((&item.driver[..], item.config)).unwrap();
+    let mut component = ComponentKind::try_from((&item.driver[..], item.config))
+        .context(format!("failed to initialize {:?}", name))?;
+    let name_ = name.clone();
     tokio::spawn(async move {
         component.init(state_tx).await;
+        tracing::info!("initializing {:?}", name_);
         while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
             let reply = execute(&mut component, request_type, payload);
             reply_tx
@@ -217,5 +267,5 @@ fn init_component(
                 .expect("controller dropped a oneshot receiver");
         }
     });
-    ((name.clone(), request_tx), (name, state_rx.into()))
+    Ok(((name.clone(), request_tx), (name, state_rx.into())))
 }

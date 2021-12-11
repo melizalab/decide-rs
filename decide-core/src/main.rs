@@ -1,32 +1,19 @@
-use anyhow::Result;
+use anyhow::Context;
 use decide_core::ComponentCollection;
-use decide_proto::{PUB_ENDPOINT, REQ_ENDPOINT};
-use futures::{SinkExt, StreamExt};
-use std::env;
-use tmq::{publish, router, Context};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "decide-core=DEBUG");
-    }
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_thread_names(true)
+        // enable everything
+        .with_max_level(tracing::Level::TRACE)
+        // sets this to be the default, global collector for this application.
+        .init();
 
-    pretty_env_logger::init();
+    tracing::debug!("hi");
 
-    let mut router_sock = router(&Context::new()).bind(REQ_ENDPOINT)?;
-    let mut publish_sock = publish(&Context::new()).bind(PUB_ENDPOINT)?;
-
-    let (mut components, mut state_stream) = ComponentCollection::new()?;
-
-    tokio::spawn(async move {
-        while let Some(state_update) = state_stream.next().await {
-            publish_sock.send(state_update).await.unwrap();
-        }
-    });
-
-    while let Some(request) = router_sock.next().await {
-        let reply = components.dispatch(request?).await;
-        router_sock.send(reply).await.expect("failed to send");
-    }
-    Ok(())
+    let (components, state_stream) =
+        ComponentCollection::new().context("could not initialize controller")?;
+    decide_core::launch_decide(components, state_stream).await
 }
