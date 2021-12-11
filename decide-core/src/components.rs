@@ -1,4 +1,7 @@
-use decide_proto::{Component, error::{DecideError, ControllerError}, Result};
+use decide_proto::{
+    error::{ControllerError, DecideError},
+    Component, Result,
+};
 use lights::Lights;
 use prost_types::Any;
 use serde_value::Value;
@@ -51,8 +54,8 @@ macro_rules! impl_component {
         }
 
         impl TryFrom<(&str, Value)> for ComponentKind {
-            type Error = DecideError;
-            fn try_from((driver_name, config): (&str, Value)) -> Result<Self> {
+            type Error = anyhow::Error;
+            fn try_from((driver_name, config): (&str, Value)) -> anyhow::Result<Self> {
                 match driver_name {
                     $(
                         stringify!($component) => Ok(ComponentKind::$component($component::new($component::deserialize_config(config)?))),
