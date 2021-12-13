@@ -18,6 +18,7 @@ use std::sync::{
     },
     Arc,
 };
+use std::sync::atomic::Ordering;
 use tokio::{
     self,
     //time::{sleep, Duration},
@@ -63,7 +64,7 @@ impl Component for PeckLeds {
         }
     }
 
-    async fn init(&self, config: Self::Config, state_sender: Sender<Any>) {
+    async fn init(&self, _config: Self::Config, _state_sender: Sender<Any>) {
         todo!("empty")
     }
 
@@ -81,7 +82,7 @@ impl Component for PeckLeds {
         Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
+    fn set_parameters(&mut self, _params: Self::Params) -> decide_proto::Result<()> {
         todo!()
     }
 
@@ -110,7 +111,7 @@ impl Component for PeckKeys {
     const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
     const PARAMS_TYPE_URL: &'static str = "";
 
-    fn new(config: Self::Config) -> Self {
+    fn new(_config: Self::Config) -> Self {
         PeckKeys {
             peck_left: Arc::new(AtomicBool::new(false)),
             peck_center:  Arc::new(AtomicBool::new(false)),
@@ -164,15 +165,22 @@ impl Component for PeckKeys {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
-        todo!()
+        self.peck_left.store(state.peck_left, Ordering::Release);
+        self.peck_center.store(state.peck_right, Ordering::Release);
+        self.peck_right.store(state.peck_center, Ordering::Release);
+        Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
+    fn set_parameters(&mut self, _params: Self::Params) -> decide_proto::Result<()> {
         todo!()
     }
 
     fn get_state(&self) -> Self::State {
-        todo!()
+        Self::State{
+            peck_left: self.peck_left.load(Ordering::Acquire),
+            peck_right: self.peck_right.load(Ordering::Acquire),
+            peck_center: self.peck_center.load(Ordering::Acquire),
+        }
     }
 
     fn get_parameters(&self) -> Self::Params {
@@ -199,7 +207,7 @@ pub enum LedColor {
     White,
 }
 impl LedColor {
-    fn next(&mut self) -> &mut Self { //TODO: determine whether or not this method is necessary
+    fn _next(&mut self) -> &mut Self { //TODO: determine whether or not this method is necessary
         match self {
             LedColor::Off   => {*self = LedColor::Blue}
             LedColor::Blue   => {*self = LedColor::Red}
