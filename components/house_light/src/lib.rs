@@ -26,7 +26,7 @@ pub mod house_light {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
-struct HouseLight {
+pub struct HouseLight {
     switch: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
     brightness: Arc<AtomicU8>,
@@ -141,7 +141,7 @@ impl HouseLight {
 }
 
 #[derive(Deserialize)]
-struct Config {
+pub struct Config {
     device_path: String, //device_path: "/sys/class/leds/starboard::lights/brightness".to_string(),
     fake_dawn: f64,
     fake_dusk: f64,

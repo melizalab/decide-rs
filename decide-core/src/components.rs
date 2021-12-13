@@ -1,5 +1,8 @@
 use decide_proto::{Component, error::{DecideError, ControllerError}, Result};
 use lights::Lights;
+use house_light::HouseLight;
+use peckboard::{PeckKeys, PeckLeds};
+use stepper_motor::StepperMotor;
 use prost_types::Any;
 use serde_value::Value;
 use std::convert::TryFrom;

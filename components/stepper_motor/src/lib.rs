@@ -30,7 +30,7 @@ pub mod stepper_motor {
 }
 
 struct LinesVal([u8; 2]);
-struct StepperMotor {
+pub struct StepperMotor {
     on: Arc<AtomicBool>,
     direction: Arc<AtomicBool>
 }
@@ -251,7 +251,7 @@ impl Component for StepperMotor {
 
 
 #[derive(Deserialize)]
-struct Config {
+pub struct Config {
     chip1: String,
     chip3: String,
     switch_offsets: [u32; 2], //14,15
