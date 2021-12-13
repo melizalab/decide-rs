@@ -19,28 +19,28 @@ macro_rules! impl_component {
                 pub fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.decode_and_change_state(message)
+                            ComponentKind::$component(t) => t.decode_and_change_state(message),
                         )*
                     }
                 }
                 pub fn decode_and_set_parameters(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.decode_and_set_parameters(message)
+                            ComponentKind::$component(t) => t.decode_and_set_parameters(message),
                         )*
                     }
                 }
                 pub fn reset_state(&mut self) -> Result<()> {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.reset_state()
+                            ComponentKind::$component(t) => t.reset_state(),
                         )*
                     }
                 }
                 pub fn get_encoded_parameters(&self) -> Any {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.get_encoded_parameters()
+                            ComponentKind::$component(t) => t.get_encoded_parameters(),
                         )*
                     }
                 }
@@ -67,8 +67,4 @@ macro_rules! impl_component {
     }
 }
 
-impl_component!(Lights);
-impl_component!(HouseLight);
-impl_component!(StepperMotor);
-impl_component!(PeckLeds);
-impl_component!(PeckKeys);
+impl_component!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys);
