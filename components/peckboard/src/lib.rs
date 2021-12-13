@@ -27,11 +27,19 @@ pub mod peckboard {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
-struct PeckLeds {
+pub struct PeckLeds {
     handles: MultiLineHandle,
-    led_state: LedState,
+    led_state: LedColor,
 }
-struct PeckKeys {
+impl PeckLeds {
+    //const OFF: String = String::from("Off");
+    //const RED: String = String::from("Red");
+    //const BLUE: String = String::from("Blue");
+    //const GREEN: String = String::from("Green");
+    //const WHITE: String = String::from("White");
+
+}
+pub struct PeckKeys {
     peck_left: Arc<AtomicBool>,
     peck_center: Arc<AtomicBool>,
     peck_right: Arc<AtomicBool>,
@@ -39,11 +47,11 @@ struct PeckKeys {
 
 #[async_trait]
 impl Component for PeckLeds {
-    type State = peckboard::Led_State;
-    type Params = peckboard::Led_Params;
+    type State = peckboard::LedState;
+    type Params = peckboard::LedParams;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/led_state";
-    const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_state";
+    const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_params";
 
     fn new(config: Self::Config) -> Self {
         let mut chip4 = Chip::new(config.peckboard_chip).unwrap();
@@ -51,7 +59,7 @@ impl Component for PeckLeds {
             .request(LineRequestFlags::OUTPUT, &[], "PeckLeds").unwrap();
         PeckLeds {
             handles,
-            led_state: LedState::Off
+            led_state: LedColor::Off
         }
     }
 
@@ -60,12 +68,12 @@ impl Component for PeckLeds {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
-        match state.led_state {
-            "off" => {self.led_state = LedState::Off}
-            "red" => {self.led_state = LedState::Red}
-            "blue" => {self.led_state = LedState::Blue}
-            "green" => {self.led_state = LedState::Green}
-            "white" => {self.led_state = LedState::White}
+        match state.led_state.as_str() {
+            "off" => {self.led_state = LedColor::Off}
+            "red" => {self.led_state = LedColor::Red}
+            "blue" => {self.led_state = LedColor::Blue}
+            "green" => {self.led_state = LedColor::Green}
+            "white" => {self.led_state = LedColor::White}
             _ => {} //throw warning
         }
         let lines_value = self.led_state.as_value();
@@ -80,24 +88,24 @@ impl Component for PeckLeds {
     fn get_state(&self) -> Self::State {
         Self::State {
             led_state: match self.led_state {
-                LedState::Off => {"off"}
-                LedState::Blue => {"blue"}
-                LedState::Red => {"red"}
-                LedState::Green => {"green"}
-                LedState::White => {"white"}
+                LedColor::Off => {String::from("off")}
+                LedColor::Blue => {String::from("blue")}
+                LedColor::Red => {String::from("red")}
+                LedColor::Green => {String::from("green")}
+                LedColor::White => {String::from("white")}
             }
         }
     }
 
     fn get_parameters(&self) -> Self::Params {
-        Ok(())
+        Self::Params{}
     }
 }
 
 #[async_trait]
 impl Component for PeckKeys {
-    type State = peckboard::Key_State;
-    type Params = peckboard::Key_Params;
+    type State = peckboard::KeyState;
+    type Params = peckboard::KeyParams;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
     const PARAMS_TYPE_URL: &'static str = "";
@@ -173,7 +181,7 @@ impl Component for PeckKeys {
 }
 
 #[derive(Deserialize)]
-struct Config {
+pub struct Config {
     interrupt_chip: String,
     interrupt_offset: u32,
     peckboard_chip: String,
@@ -183,31 +191,31 @@ struct Config {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum LedState {
+pub enum LedColor {
     Off,
     Blue,
     Red,
     Green,
     White,
 }
-impl LedState {
+impl LedColor {
     fn next(&mut self) -> &mut Self { //TODO: determine whether or not this method is necessary
         match self {
-            LedState::Off   => {*self = LedState::Blue}
-            LedState::Blue   => {*self = LedState::Red}
-            LedState::Red  => {*self = LedState::Green}
-            LedState::Green => {*self = LedState::White}
-            LedState::White   => {*self = LedState::Off}
+            LedColor::Off   => {*self = LedColor::Blue}
+            LedColor::Blue   => {*self = LedColor::Red}
+            LedColor::Red  => {*self = LedColor::Green}
+            LedColor::Green => {*self = LedColor::White}
+            LedColor::White   => {*self = LedColor::Off}
         };
         self
     }
     fn as_value(&self) -> [u8; 3] {
         match self {
-            LedState::Off => {[0,0,0]}
-            LedState::Red => {[1,0,0]}
-            LedState::Blue => {[0,1,0]}
-            LedState::Green => {[0,0,1]}
-            LedState::White => {[1,1,1]}
+            LedColor::Off => {[0,0,0]}
+            LedColor::Red => {[1,0,0]}
+            LedColor::Blue => {[0,1,0]}
+            LedColor::Green => {[0,0,1]}
+            LedColor::White => {[1,1,1]}
         }
     }
 }
