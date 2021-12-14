@@ -1,14 +1,11 @@
-use decide_proto::{
-    error::{ControllerError, DecideError},
-    Component, Result,
-};
+use decide_proto::{error::ControllerError, Component, Result};
 use lights::Lights;
 use prost_types::Any;
 use serde_value::Value;
 use std::convert::TryFrom;
 use tokio::sync::mpsc;
 
-macro_rules! impl_component {
+macro_rules! impl_components {
     ($($component:ident),*) => {
         pub enum ComponentKind {
             $(
@@ -44,10 +41,10 @@ macro_rules! impl_component {
                         )*
                     }
                 }
-                pub async fn init(&self, sender: mpsc::Sender<Any>) {
+                pub async fn init(&self, config: Value, sender: mpsc::Sender<Any>) {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.init(sender).await,
+                            ComponentKind::$component(t) => t.init($component::deserialize_config(config).unwrap(), sender).await,
                         )*
                     }
                 }
@@ -67,4 +64,4 @@ macro_rules! impl_component {
     }
 }
 
-impl_component!(Lights);
+impl_components!(Lights);

@@ -1,3 +1,4 @@
+use anyhow::Context as AnyhowContext;
 use decide_proto::{
     decide,
     error::{ClientError, ControllerError},
@@ -26,33 +27,7 @@ use tracing::instrument;
 mod components;
 use components::ComponentKind;
 
-use anyhow::Context as AnyhowContext;
-use decide_proto::{PUB_ENDPOINT, REQ_ENDPOINT};
-use futures::SinkExt;
-use tmq::{publish, router, Context};
-
-pub async fn launch_decide<S>(
-    mut components: ComponentCollection,
-    mut state_stream: S,
-) -> anyhow::Result<()>
-where
-    S: Stream<Item = decide::Pub> + Unpin + Send + 'static,
-{
-    let mut router_sock = router(&Context::new()).bind(REQ_ENDPOINT)?;
-    let mut publish_sock = publish(&Context::new()).bind(PUB_ENDPOINT)?;
-
-    tokio::spawn(async move {
-        while let Some(state_update) = state_stream.next().await {
-            publish_sock.send(state_update).await.unwrap();
-        }
-    });
-
-    while let Some(request) = router_sock.next().await {
-        let reply = components.dispatch(request?).await;
-        router_sock.send(reply).await.expect("failed to send");
-    }
-    Ok(())
-}
+pub mod run;
 
 type RequestBundle = ((ComponentRequest, Vec<u8>), oneshot::Sender<decide::Reply>);
 
@@ -75,8 +50,7 @@ struct ComponentsConfigItem {
 impl ComponentCollection {
     #[instrument]
     pub fn new() -> anyhow::Result<(Self, impl Stream<Item = decide::Pub>)> {
-        let config_file = ProjectDirs::from("org", "meliza", "decide")
-            .ok_or_else(|| ControllerError::NoConfigDir)?
+        let config_file = ProjectDirs::from("org", "meliza", "decide").ok_or(ControllerError::NoConfigDir)?
             .config_dir()
             .join("components.yml");
         let reader = File::open(&config_file).map_err(|e| ControllerError::ConfigReadError {
@@ -97,7 +71,7 @@ impl ComponentCollection {
                 source: e,
             })?;
         let components_config: ComponentsConfig =
-            serde_yaml::from_slice(&file_buf[..]).map_err(|e| ControllerError::from(e))?;
+            serde_yaml::from_slice(&file_buf[..]).map_err(ControllerError::from)?;
         let config_id = Sha3_256::new().chain(&file_buf).finalize();
         let config_id = format!("{:?}", config_id.as_slice());
         let (components, state_stream): (_, HashMap<_, _>) = components_config
@@ -119,7 +93,6 @@ impl ComponentCollection {
         ))
     }
 
-    #[instrument]
     pub async fn dispatch(&mut self, mut request: Multipart) -> Multipart {
         let client_id = request.pop_front().unwrap();
         let empty_frame = request.pop_front().unwrap();
@@ -132,6 +105,7 @@ impl ComponentCollection {
 
     async fn handle_request(&mut self, request: Multipart) -> Result<decide::Reply> {
         let request = Request::try_from(request)?;
+        tracing::info!("Received request {:?}", request);
         match request.request_type {
             RequestType::General(req) => self.handle_general(req, request.body),
             RequestType::Component(req) => self.handle_component(req, request).await,
@@ -145,9 +119,12 @@ impl ComponentCollection {
     ) -> Result<decide::Reply> {
         Ok(match request_type {
             RequestLock => self.request_lock(
-                decide::Config::decode(&*payload).map_err(|e| ClientError::from(e))?,
+                decide::Config::decode(&*payload).map_err(ClientError::from)?,
             )?,
             ReleaseLock => self.release_lock()?,
+            Shutdown => {
+                panic!("shutting down")
+            }
         }
         .into())
     }
@@ -160,14 +137,13 @@ impl ComponentCollection {
         let component_name = request.component.take().unwrap();
         let component_tx = self
             .components
-            .get_mut(&component_name)
-            .ok_or_else(|| ClientError::UnknownComponent(component_name))?;
+            .get_mut(&component_name).ok_or(ClientError::UnknownComponent(component_name))?;
         let (reply_tx, reply_rx) = oneshot::channel();
         component_tx
             .send(((request_type, request.body), reply_tx))
             .await
             .expect("could not talk over mpsc");
-        Ok(reply_rx.await.map_err(|e| ControllerError::from(e))?)
+        Ok(reply_rx.await.map_err(ControllerError::from)?)
     }
 
     fn request_lock(&mut self, config: decide::Config) -> Result<decide::reply::Result> {
@@ -199,9 +175,9 @@ fn execute(
     Ok(match request_type {
         ChangeState => {
             let state_change =
-                decide::StateChange::decode(&*payload).map_err(|e| ClientError::from(e))?;
+                decide::StateChange::decode(&*payload).map_err(ClientError::from)?;
             component
-                .decode_and_change_state(state_change.state.ok_or_else(|| ClientError::NoState)?)?;
+                .decode_and_change_state(state_change.state.ok_or(ClientError::NoState)?)?;
             decide::reply::Result::Ok(())
         }
         ResetState => {
@@ -210,9 +186,9 @@ fn execute(
         }
         SetParameters => {
             let params =
-                decide::ComponentParams::decode(&*payload).map_err(|e| ClientError::from(e))?;
+                decide::ComponentParams::decode(&*payload).map_err(ClientError::from)?;
             component.decode_and_set_parameters(
-                params.parameters.ok_or_else(|| ClientError::NoParameters)?,
+                params.parameters.ok_or(ClientError::NoParameters)?,
             )?;
             decide::reply::Result::Ok(())
         }
@@ -233,7 +209,7 @@ where
             .into_iter()
             .map(|(name, state_rx)| state_rx.map(move |state| (name.clone(), state))),
     )
-    .map(|(name, state)| decide::Pub {
+    .map(|(_name, state)| decide::Pub {
         state: Some(state),
         time: Some(Timestamp {
             seconds: SystemTime::now()
@@ -254,11 +230,12 @@ fn init_component(
 )> {
     let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
     let (state_tx, state_rx) = mpsc::channel::<Any>(100);
+    let config = item.config.clone();
     let mut component = ComponentKind::try_from((&item.driver[..], item.config))
         .context(format!("failed to initialize {:?}", name))?;
     let name_ = name.clone();
     tokio::spawn(async move {
-        component.init(state_tx).await;
+        component.init(config, state_tx).await;
         tracing::info!("initializing {:?}", name_);
         while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
             let reply = execute(&mut component, request_type, payload);

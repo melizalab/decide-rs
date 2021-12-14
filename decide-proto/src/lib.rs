@@ -83,6 +83,7 @@ pub enum ComponentRequest {
 pub enum GeneralRequest {
     RequestLock = 0x20,
     ReleaseLock = 0x21,
+    Shutdown = 0x22,
 }
 
 #[async_trait]
@@ -94,7 +95,7 @@ pub trait Component {
     const PARAMS_TYPE_URL: &'static str;
 
     fn new(config: Self::Config) -> Self;
-    async fn init(&self, state_sender: mpsc::Sender<Any>);
+    async fn init(&self, config: Self::Config, state_sender: mpsc::Sender<Any>);
     fn change_state(&mut self, state: Self::State) -> Result<()>;
     fn set_parameters(&mut self, params: Self::Params) -> Result<()>;
     fn get_state(&self) -> Self::State;
@@ -214,8 +215,7 @@ impl TryFrom<Multipart> for Request {
                 zmq_message
                     .pop_front()
                     .ok_or_else(|| ClientError::BadMultipartLen(zmq_message.len()))?
-                    .as_str()
-                    .ok_or_else(|| ClientError::InvalidComponent)?
+                    .as_str().ok_or(ClientError::InvalidComponent)?
                     .into(),
             ),
         };

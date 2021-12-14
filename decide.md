@@ -104,6 +104,8 @@ Requests that the state of the component specified by `name` be reset to its def
 
 #### Unlock experiment (0x21)
 
+#### Shutdown (0x22)
+
 ### REP messages
 
 For each REQ message, the `controller` must respond with a REP consisting of the following zmq frames:
