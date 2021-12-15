@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+message State {
+  bool server = 1;
+  bool playing = 2;
+  string stimulus = 3;
+}
+
+message Params {
+  int32 timeout = 1;
+}
