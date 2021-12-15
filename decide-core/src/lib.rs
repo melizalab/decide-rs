@@ -210,7 +210,7 @@ I: IntoIterator<Item = (ComponentName, ReceiverStream<Any>)>,
         .map(|(name, state_rx)| state_rx.map(move |state| (name.clone(), state))),
         )
         .map(|(name, state)| {
-            let topic = name;
+            let topic = String::from("state/") + &name.0;
             let pub_message = proto::Pub {
                 state: Some(state),
                 time: Some(Timestamp {
@@ -221,7 +221,7 @@ I: IntoIterator<Item = (ComponentName, ReceiverStream<Any>)>,
                         nanos: 0,
                 }),
             };
-            Multipart::from(vec![topic.0.as_bytes(), &pub_message.encode_to_vec()[..]])
+            Multipart::from(vec![topic.as_bytes(), &pub_message.encode_to_vec()[..]])
         })
 }
 
