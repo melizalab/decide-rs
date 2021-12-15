@@ -11,8 +11,6 @@ async fn main() -> anyhow::Result<()> {
         // sets this to be the default, global collector for this application.
         .init();
 
-    tracing::debug!("hi");
-
     let (components, state_stream) =
         ComponentCollection::new().context("could not initialize controller")?;
     let res = run::launch_decide(components, state_stream)?;
