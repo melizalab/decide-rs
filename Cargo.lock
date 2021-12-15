@@ -433,6 +433,7 @@ dependencies = [
  "prost-types",
  "serde",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

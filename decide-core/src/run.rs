@@ -1,11 +1,10 @@
 use super::ComponentCollection;
-use decide_proto::decide;
 use decide_proto::{PUB_ENDPOINT, REQ_ENDPOINT};
 use futures::{
     future::{self, Future, FutureExt},
     SinkExt, Stream, StreamExt,
 };
-use tmq::Context;
+use tmq::{Context, Multipart};
 use tokio::sync::oneshot;
 
 pub fn launch_decide<S>(
@@ -13,7 +12,7 @@ pub fn launch_decide<S>(
     state_stream: S,
 ) -> Result<impl Future<Output = anyhow::Result<()>>, oneshot::error::RecvError>
 where
-    S: Stream<Item = decide::Pub> + Unpin + Send + 'static,
+    S: Stream<Item = Multipart> + Unpin + Send + 'static,
 {
     let (tx_pub, rx_pub) = oneshot::channel();
     tokio::spawn(async move {
@@ -32,7 +31,7 @@ where
 
 async fn process_pubs<S>(mut state_stream: S) -> anyhow::Result<()>
 where
-    S: Stream<Item = decide::Pub> + Unpin + Send + 'static,
+    S: Stream<Item = Multipart> + Unpin + Send + 'static,
 {
     let mut publish_sock = tmq::publish(&Context::new()).bind(PUB_ENDPOINT)?;
     while let Some(state_update) = state_stream.next().await {

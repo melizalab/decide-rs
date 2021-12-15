@@ -1,7 +1,13 @@
-use decide_proto::{decide::Reply, GeneralRequest, Request, RequestType, REQ_ENDPOINT};
-use tmq::{request, Context, Multipart};
+use decide_proto::{proto::{reply, Pub, Reply, Config, StateChange, ComponentParams}, GeneralRequest, Request, RequestType, ComponentRequest, REQ_ENDPOINT, PUB_ENDPOINT, ComponentName};
+use futures::{Stream, StreamExt};
+use decide_proto::Component;
+use lights::Lights;
+use tmq::{request, subscribe, Context, Multipart};
+use prost::Message;
+use prost_types::Any;
+use tokio::test;
 
-async fn send_request(message: Request) -> anyhow::Result<Reply> {
+async fn send_request(message: Request) -> anyhow::Result<reply::Result> {
     let ctx = Context::new();
     tracing::trace!("trying to connect");
     let req_sock = request(&ctx).connect(REQ_ENDPOINT)?;
@@ -15,18 +21,112 @@ async fn send_request(message: Request) -> anyhow::Result<Reply> {
     tracing::trace!("received reply");
     let reply = Reply::from(multipart);
     println!("{:?}", reply);
-    Ok(reply)
+    Ok(reply.result.unwrap())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_log::test]
-async fn request_lock() -> anyhow::Result<()> {
+fn pub_stream(topic: &[u8]) -> anyhow::Result<impl Stream<Item = Pub>> {
+     let socket = subscribe(&Context::new())
+        .connect(PUB_ENDPOINT)?
+        .subscribe(topic)?
+        .map(|x| {
+            let encoded_pub = x.unwrap().pop_front().unwrap();
+            Pub::decode(&encoded_pub[..]).unwrap()
+        });
+     Ok(socket)
+}
+
+macro_rules! lock {
+    () => {
+        {
+            let config = Config {
+                identifier: String::from("39c12c22af89685008eb9725a40b94089dfa36d27cfc0cdb912629c6ff2de50e"),
+            };
+            let request = Request {
+                request_type: RequestType::General(GeneralRequest::RequestLock),
+                component: None,
+                body: config.encode_to_vec(),
+            };
+            let result = send_request(request).await?;
+            result
+        }
+    };
+}
+
+macro_rules! unlock {
+    () => {
+        {
+            let request = Request {
+                request_type: RequestType::General(GeneralRequest::ReleaseLock),
+                component: None,
+                body: vec![],
+            };
+            let result = send_request(request).await?;
+            result
+        }
+    }
+}
+
+#[test]
+async fn locking_behavior() -> anyhow::Result<()> {
+    let result = lock!();
+    assert_eq!(result, reply::Result::Ok(()));
+    let result = lock!();
+    assert_eq!(result, reply::Result::Error(String::from("controller is already locked")));
+    let result = unlock!();
+    assert_eq!(result, reply::Result::Ok(()));
+    let result = lock!();
+    assert_eq!(result, reply::Result::Ok(()));
+    unlock!();
+    Ok(())
+}
+
+#[test]
+async fn parameters() {
+    let params = Any {
+        type_url: String::from(Lights::PARAMS_TYPE_URL),
+        value: lights::proto::Params {
+            blink: false,
+        }.encode_to_vec(),
+    };
+    let params_message = ComponentParams {
+        parameters: Some(params.clone()),
+    };
     let request = Request {
-        request_type: RequestType::General(GeneralRequest::RequestLock),
-        component: None,
+        request_type: RequestType::Component(ComponentRequest::SetParameters),
+        component: Some(ComponentName(String::from("house-lights"))),
+        body: params_message.encode_to_vec(),
+    };
+    let result = send_request(request).await.unwrap();
+    assert_eq!(result, reply::Result::Ok(()));
+    let request = Request {
+        request_type: RequestType::Component(ComponentRequest::GetParameters),
+        component: Some(ComponentName(String::from("house-lights"))),
         body: vec![],
     };
-    let reply = send_request(request).await?;
-    assert!(reply.result.is_some());
-    Ok(())
+    let result = send_request(request).await.unwrap();
+    assert_eq!(result, reply::Result::Params(params));
+}
+
+#[test_log::test(test)]
+#[ignore = "the Lights component doesn't work right"]
+async fn state() {
+    let state = Any {
+        type_url: String::from(Lights::STATE_TYPE_URL),
+        value: lights::proto::State {
+            on: true,
+        }.encode_to_vec(),
+    };
+    let state_message = StateChange {
+        state: Some(state.clone()),
+    };
+    let request = Request {
+        request_type: RequestType::Component(ComponentRequest::ChangeState),
+        component: Some(ComponentName(String::from("house-lights"))),
+        body: state_message.encode_to_vec(),
+    };
+    let result = send_request(request).await.unwrap();
+    assert_eq!(result, reply::Result::Ok(()));
+    tracing::trace!("waiting for pub");
+    let state_update = pub_stream(b"").unwrap().next().await.unwrap();
+    assert_eq!(state_update.state.unwrap(), state);
 }

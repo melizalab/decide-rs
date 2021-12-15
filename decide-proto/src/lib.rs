@@ -15,14 +15,14 @@ pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
 pub const REQ_ENDPOINT: &str = "tcp://127.0.0.1:7897";
 pub const PUB_ENDPOINT: &str = "tcp://127.0.0.1:7898";
 
-pub mod decide {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/decide.rs"));
 }
 
 pub type Result<T> = core::result::Result<T, DecideError>;
 
 #[derive(Debug, Deserialize, Hash, PartialEq, Eq, Clone)]
-pub struct ComponentName(String);
+pub struct ComponentName(pub String);
 
 impl From<&str> for ComponentName {
     fn from(name: &str) -> Self {
@@ -147,30 +147,30 @@ pub trait Component {
     }
 }
 
-impl From<decide::reply::Result> for decide::Reply {
-    fn from(result: decide::reply::Result) -> Self {
-        decide::Reply {
+impl From<proto::reply::Result> for proto::Reply {
+    fn from(result: proto::reply::Result) -> Self {
+        proto::Reply {
             result: Some(result),
         }
     }
 }
 
-impl From<Result<decide::reply::Result>> for decide::Reply {
-    fn from(result: Result<decide::reply::Result>) -> Self {
-        decide::Reply {
+impl From<Result<proto::reply::Result>> for proto::Reply {
+    fn from(result: Result<proto::reply::Result>) -> Self {
+        proto::Reply {
             result: Some(match result {
-                Err(e) => decide::reply::Result::Error(e.to_string()),
+                Err(e) => proto::reply::Result::Error(e.to_string()),
                 Ok(r) => r,
             }),
         }
     }
 }
 
-impl From<Result<decide::Reply>> for decide::Reply {
-    fn from(result: Result<decide::Reply>) -> Self {
+impl From<Result<proto::Reply>> for proto::Reply {
+    fn from(result: Result<proto::Reply>) -> Self {
         match result {
-            Err(e) => decide::Reply {
-                result: Some(decide::reply::Result::Error(e.to_string())),
+            Err(e) => proto::Reply {
+                result: Some(proto::reply::Result::Error(e.to_string())),
             },
             Ok(r) => r,
         }
@@ -227,22 +227,22 @@ impl TryFrom<Multipart> for Request {
     }
 }
 
-impl From<decide::Reply> for Multipart {
-    fn from(reply: decide::Reply) -> Self {
+impl From<proto::Reply> for Multipart {
+    fn from(reply: proto::Reply) -> Self {
         vec![&DECIDE_VERSION[..], &reply.encode_to_vec()].into()
     }
 }
 
-impl From<Multipart> for decide::Reply {
+impl From<Multipart> for proto::Reply {
     fn from(mut multipart: Multipart) -> Self {
         let _version = multipart.pop_front().unwrap();
         let payload = multipart.pop_front().unwrap();
-        decide::Reply::decode(&*payload).unwrap()
+        proto::Reply::decode(&*payload).unwrap()
     }
 }
 
-impl From<decide::Pub> for Multipart {
-    fn from(pub_message: decide::Pub) -> Self {
+impl From<proto::Pub> for Multipart {
+    fn from(pub_message: proto::Pub) -> Self {
         vec![&DECIDE_VERSION[..], &pub_message.encode_to_vec()].into()
     }
 }
