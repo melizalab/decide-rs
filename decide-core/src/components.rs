@@ -1,5 +1,9 @@
 use decide_proto::{error::ControllerError, Component, Result};
 use lights::Lights;
+use house_light::HouseLight;
+use stepper_motor::StepperMotor;
+use peckboard::{PeckLeds,PeckKeys};
+use sound::AudioPlayer;
 use prost_types::Any;
 use serde_value::Value;
 use std::convert::TryFrom;
@@ -64,4 +68,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights);
+impl_components!(Lights, HouseLight, StepperMotor, PeckKeys, PeckLeds, AudioPlayer);

@@ -9,6 +9,10 @@ edition = "2018"
 [dependencies]
 decide-proto = { path = "../decide-proto" }
 lights = { path = "../components/lights" }
+house_light = {path = "../components/house_light"}
+stepper_motor = {path = "../components/stepper_motor"}
+peckboard = {path = "../components/peckboard"}
+sound = {path = "../components/sound"}
 tmq = "0.3.0"
 zmq = "0.9.2"
 log = "0.4.14"

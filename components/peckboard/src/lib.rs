@@ -32,14 +32,7 @@ pub struct PeckLeds {
     handles: MultiLineHandle,
     led_state: LedColor,
 }
-impl PeckLeds {
-    //const OFF: String = String::from("Off");
-    //const RED: String = String::from("Red");
-    //const BLUE: String = String::from("Blue");
-    //const GREEN: String = String::from("Green");
-    //const WHITE: String = String::from("White");
 
-}
 pub struct PeckKeys {
     peck_left: Arc<AtomicBool>,
     peck_center: Arc<AtomicBool>,
@@ -120,10 +113,6 @@ impl Component for PeckKeys {
     }
 
     async fn init(&self, config: Self::Config, state_sender: Sender<Any>) {
-        //let peck_left = self.peck_left.clone();
-        //let peck_center = self.peck_center.clone();
-        //let peck_right = self.peck_right.clone();
-
         tokio::spawn(async move {
             let mut chip2 = Chip::new(config.interrupt_chip).unwrap();
             let interrupt_offset = chip2.get_line(config.interrupt_offset).unwrap();
@@ -207,6 +196,7 @@ pub enum LedColor {
     White,
 }
 impl LedColor {
+    //for light cycling
     fn _next(&mut self) -> &mut Self { //TODO: determine whether or not this method is necessary
         match self {
             LedColor::Off   => {*self = LedColor::Blue}
@@ -217,6 +207,7 @@ impl LedColor {
         };
         self
     }
+    //convert LedColor to offset values
     fn as_value(&self) -> [u8; 3] {
         match self {
             LedColor::Off => {[0,0,0]}

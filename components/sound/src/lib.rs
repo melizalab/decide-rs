@@ -12,7 +12,7 @@ use tokio::{self,
 };
 use tmq;
 
-struct AudioPlayer {
+pub struct AudioPlayer {
     server: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     stimulus: &'static str,
