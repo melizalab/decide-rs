@@ -49,7 +49,7 @@ protocol as possible, but the current implementation uses
 [zeromq](https://zeromq.org), with an asynchronous PUB channel and a synchronous
 REQ channel.
 
-TODO: define port numbers here. Current temporary ports:
+Current temporary ports:
 
 - request port 7897
 - publish port 7898
@@ -63,13 +63,11 @@ PUB messages are sent asynchronously and do not require a response. In zeromq, P
 Changes to the state of a component are published under the topic `state/name`, where `name` is the name of the component. All components have unique names. The payload of the message comprises a [protocol buffer](https://developers.google.com/protocol-buffers/) with the following specification:
 
 ``` protocol-buffer
-message StateChange {
-  // when the state change occurred, in microseconds since the epoch
-  required uint64 time = 1;
+message Pub {
+  google.protobuf.Timestamp time = 1;
+  google.protobuf.Any state = 2;
 }
 ```
-
-TODO: Can we nail down the spec for the values of the state? The data type will vary depending on the component.
 
 #### Log messages
 
@@ -85,14 +83,15 @@ A request consists of the following zmq frames:
 - Frame 1: "DCDC01" (six bytes, representing decide/control v0.1)
 - Frame 2: Request type (one byte, see below)
 - Frame 3: Request body (message type dependent)
+- Frame 4: Component name (UTF-8 encoded, frame only required by some request types)
 
 #### Change state (0x00)
 
-Requests a modification to the state of the component specified by `name`. Controller will reply with error (0x01) if the component does not exist or the request was badly formed, and with OK (0x00) otherwise. Note that the actual state change will be broadcast on the PUB channel.
+Requests a modification to the state of the component specified by `name`. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
 
 #### Reset state (0x01)
 
-Requests that the state of the component specified by `name` be reset to its default value. Controller will reply with error (0x01) if the component does not exist or the request was badly formed, and with OK (0x00) otherwise. Note that the actual state change will be broadcast on the PUB channel.
+Requests that the state of the component specified by `name` be reset to its default value. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
 
 #### Set parameters (0x02)
 
@@ -104,27 +103,26 @@ Requests that the state of the component specified by `name` be reset to its def
 
 #### Unlock experiment (0x21)
 
+#### Shutdown (0x22)
+
 ### REP messages
 
 For each REQ message, the `controller` must respond with a REP consisting of the following zmq frames:
 
 - Frame 0: Empty (zero bytes, invisible to REQ application)
-- Frame 1: "DCDC01" (six bytes, representing decide/control v0.1)
-- Frame 2: Reply type (one byte, see below)
 - Frame 3: Reply body (message type dependent)
 
-#### OK (0x00)
-
-#### error (0x01)
-
-#### Get component parameters (0x12)
-
-``` protocol-buffer
-
-```
-
-#### Get component state type (0x13)
-
-``` protocol-buffer
-
+```protocol-buffer
+/* These are the reply types */
+message Reply {
+  oneof result {
+    // For state_change, state_reset, lock_expt, unlock_expt:
+    // indicates the request was correctly formed and was acted on
+    google.protobuf.Empty ok = 2;
+    // indicates an error with the request, contents give the cause
+    string error = 3;
+    // reply to get_parameters
+    google.protobuf.Any params = 19;
+  }
+}
 ```

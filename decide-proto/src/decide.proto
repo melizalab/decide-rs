@@ -46,7 +46,6 @@ message Reply {
     string error = 3;
     // reply to get_parameters
     google.protobuf.Any params = 19;
-    // reply to get_component_config, and get_controller_config
   }
 }
 

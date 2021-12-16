@@ -1,6 +1,7 @@
 use async_trait::async_trait;
+use error::{ClientError, ControllerError, DecideError};
 use num_derive::{FromPrimitive, ToPrimitive};
-use num_traits::FromPrimitive;
+use num_traits::{FromPrimitive, ToPrimitive};
 use prost::Message as ProstMessage;
 use prost_types::Any;
 use serde::{de::DeserializeOwned, Deserialize};
@@ -8,22 +9,20 @@ use serde_value::{DeserializerError, Value, ValueDeserializer};
 use std::convert::TryFrom;
 use tmq::Multipart;
 use tokio::sync::mpsc;
-use error::{DecideError, ClientError, ControllerError};
-//use gpio_cdev::{Error as GpioError};
 
 pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
 
 pub const REQ_ENDPOINT: &str = "tcp://127.0.0.1:7897";
 pub const PUB_ENDPOINT: &str = "tcp://127.0.0.1:7898";
 
-pub mod decide {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/decide.rs"));
 }
 
 pub type Result<T> = core::result::Result<T, DecideError>;
 
 #[derive(Debug, Deserialize, Hash, PartialEq, Eq, Clone)]
-pub struct ComponentName(String);
+pub struct ComponentName(pub String);
 
 impl From<&str> for ComponentName {
     fn from(name: &str) -> Self {
@@ -31,7 +30,7 @@ impl From<&str> for ComponentName {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Request {
     pub request_type: RequestType,
     pub component: Option<ComponentName>,
@@ -39,10 +38,26 @@ pub struct Request {
 }
 
 use RequestType::*;
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RequestType {
     Component(ComponentRequest),
     General(GeneralRequest),
+}
+
+impl ToPrimitive for RequestType {
+    fn to_u64(&self) -> Option<u64> {
+        match self {
+            Component(c) => c.to_u64(),
+            General(g) => g.to_u64(),
+        }
+    }
+
+    fn to_i64(&self) -> Option<i64> {
+        match self {
+            Component(c) => c.to_i64(),
+            General(g) => g.to_i64(),
+        }
+    }
 }
 
 impl TryFrom<u8> for RequestType {
@@ -56,7 +71,7 @@ impl TryFrom<u8> for RequestType {
     }
 }
 
-#[derive(Debug, Clone, Copy, ToPrimitive, FromPrimitive)]
+#[derive(Debug, Clone, Copy, ToPrimitive, FromPrimitive, PartialEq)]
 pub enum ComponentRequest {
     ChangeState = 0x00,
     ResetState = 0x01,
@@ -64,10 +79,11 @@ pub enum ComponentRequest {
     GetParameters = 0x12,
 }
 
-#[derive(Debug, Clone, Copy, ToPrimitive, FromPrimitive)]
+#[derive(Debug, Clone, Copy, ToPrimitive, FromPrimitive, PartialEq)]
 pub enum GeneralRequest {
     RequestLock = 0x20,
     ReleaseLock = 0x21,
+    Shutdown = 0x22,
 }
 
 #[async_trait]
@@ -87,7 +103,7 @@ pub trait Component {
     fn deserialize_config(config: Value) -> Result<Self::Config> {
         let deserializer: ValueDeserializer<DeserializerError> = ValueDeserializer::new(config);
         let config = Self::Config::deserialize(deserializer)
-            .map_err(|e| ControllerError::ConfigDeserializationError { source: e } )?;
+            .map_err(|e| ControllerError::ConfigDeserializationError { source: e })?;
         Ok(config)
     }
     fn get_encoded_parameters(&self) -> Any {
@@ -107,50 +123,74 @@ pub trait Component {
     }
     fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
         if message.type_url != Self::STATE_TYPE_URL {
-            return Err(ClientError::WrongAnyProtoType{
+            return Err(ClientError::WrongAnyProtoType {
                 actual: message.type_url,
                 expected: Self::STATE_TYPE_URL.into(),
-            }.into());
+            }
+            .into());
         }
-        self.change_state(Self::State::decode(&*message.value).map_err(ClientError::MessageDecodingError)?)
+        self.change_state(
+            Self::State::decode(&*message.value).map_err(ClientError::MessageDecodingError)?,
+        )
     }
     fn decode_and_set_parameters(&mut self, message: Any) -> Result<()> {
         if message.type_url != Self::PARAMS_TYPE_URL {
             return Err(ClientError::WrongAnyProtoType {
                 actual: message.type_url,
                 expected: Self::PARAMS_TYPE_URL.into(),
-            }.into());
+            }
+            .into());
         }
-        self.set_parameters(Self::Params::decode(&*message.value).map_err(ClientError::MessageDecodingError)?)
+        self.set_parameters(
+            Self::Params::decode(&*message.value).map_err(ClientError::MessageDecodingError)?,
+        )
     }
 }
 
-impl From<decide::reply::Result> for decide::Reply {
-    fn from(result: decide::reply::Result) -> Self {
-        decide::Reply {
+impl From<proto::reply::Result> for proto::Reply {
+    fn from(result: proto::reply::Result) -> Self {
+        proto::Reply {
             result: Some(result),
         }
     }
 }
 
-impl From<Result<decide::reply::Result>> for decide::Reply {
-    fn from(result: Result<decide::reply::Result>) -> Self {
-        decide::Reply {
+impl From<Result<proto::reply::Result>> for proto::Reply {
+    fn from(result: Result<proto::reply::Result>) -> Self {
+        proto::Reply {
             result: Some(match result {
-                Err(e) => decide::reply::Result::Error(e.to_string()),
+                Err(e) => proto::reply::Result::Error(e.to_string()),
                 Ok(r) => r,
             }),
         }
     }
 }
 
-impl From<Result<decide::Reply>> for decide::Reply {
-    fn from(result: Result<decide::Reply>) -> Self {
+impl From<Result<proto::Reply>> for proto::Reply {
+    fn from(result: Result<proto::Reply>) -> Self {
         match result {
-            Err(e) => decide::Reply {
-                result: Some(decide::reply::Result::Error(e.to_string())),
+            Err(e) => proto::Reply {
+                result: Some(proto::reply::Result::Error(e.to_string())),
             },
             Ok(r) => r,
+        }
+    }
+}
+
+impl From<Request> for Multipart {
+    fn from(request: Request) -> Self {
+        match request.component {
+            None => Multipart::from(vec![
+                &DECIDE_VERSION[..],
+                &[request.request_type.to_u8().unwrap()],
+                &request.body,
+            ]),
+            Some(component) => Multipart::from(vec![
+                &DECIDE_VERSION[..],
+                &[request.request_type.to_u8().unwrap()],
+                &request.body,
+                component.0.as_bytes(),
+            ]),
         }
     }
 }
@@ -175,8 +215,7 @@ impl TryFrom<Multipart> for Request {
                 zmq_message
                     .pop_front()
                     .ok_or_else(|| ClientError::BadMultipartLen(zmq_message.len()))?
-                    .as_str()
-                    .ok_or_else(|| ClientError::InvalidComponent)?
+                    .as_str().ok_or(ClientError::InvalidComponent)?
                     .into(),
             ),
         };
@@ -188,29 +227,37 @@ impl TryFrom<Multipart> for Request {
     }
 }
 
-impl From<decide::Reply> for Multipart {
-    fn from(reply: decide::Reply) -> Self {
+impl From<proto::Reply> for Multipart {
+    fn from(reply: proto::Reply) -> Self {
         vec![&DECIDE_VERSION[..], &reply.encode_to_vec()].into()
     }
 }
 
-impl From<decide::Pub> for Multipart {
-    fn from(pub_message: decide::Pub) -> Self {
+impl From<Multipart> for proto::Reply {
+    fn from(mut multipart: Multipart) -> Self {
+        let _version = multipart.pop_front().unwrap();
+        let payload = multipart.pop_front().unwrap();
+        proto::Reply::decode(&*payload).unwrap()
+    }
+}
+
+impl From<proto::Pub> for Multipart {
+    fn from(pub_message: proto::Pub) -> Self {
         vec![&DECIDE_VERSION[..], &pub_message.encode_to_vec()].into()
     }
 }
 
 pub mod error {
-    use thiserror::Error;
-    use serde_yaml::Error as YamlError;
-    use prost::DecodeError;
-    use tokio::sync::oneshot;
-    use serde_value::DeserializerError;
     use super::ComponentName;
+    use prost::DecodeError;
+    use serde_value::DeserializerError;
+    use serde_yaml::Error as YamlError;
+    use thiserror::Error;
+    use tokio::sync::oneshot;
 
     #[derive(Error, Debug)]
     pub enum DecideError {
-        #[error("error in client behavior")]
+        #[error(transparent)]
         Client {
             #[from]
             source: ClientError,
@@ -218,9 +265,9 @@ pub mod error {
         #[error("error in component")]
         Component {
             #[from]
-            source: anyhow::Error
+            source: anyhow::Error,
         },
-        #[error("error in controller")]
+        #[error(transparent)]
         Controller {
             #[from]
             source: ControllerError,
@@ -246,10 +293,7 @@ pub mod error {
         #[error("controller is already locked")]
         AlreadyLocked,
         #[error("the provided config identifier `{client}` does not match the config of the controller `{controller}`")]
-        ConfigIdMismatch {
-            client: String,
-            controller: String,
-        },
+        ConfigIdMismatch { client: String, controller: String },
         #[error("no state message provided")]
         NoState,
         #[error("no parameters message provided")]
@@ -259,17 +303,14 @@ pub mod error {
         #[error("this controller does not support protcol version `{0:?}`")]
         IncompatibleVersion(Vec<u8>),
         #[error("`Any` protobuf type mismatch: found {actual}, expected {expected}")]
-        WrongAnyProtoType {
-            actual: String,
-            expected: String
-        },
+        WrongAnyProtoType { actual: String, expected: String },
     }
 
     #[derive(Error, Debug)]
     pub enum ControllerError {
         #[error("could not determine config directory")]
         NoConfigDir,
-        #[error("could not open config file `{path:?}`")]
+        #[error("could not read from config file `{path:?}`")]
         ConfigReadError {
             path: Option<std::path::PathBuf>,
             source: std::io::Error,
@@ -279,60 +320,35 @@ pub mod error {
         #[error("component is unable to provide a reply")]
         OneshotRecvDropped(#[from] oneshot::error::RecvError),
         #[error("could not deserialize config")]
-        ConfigDeserializationError {
-            source: DeserializerError,
-        },
+        ConfigDeserializationError { source: DeserializerError },
         #[error("unrecognized component driver name `{0}`")]
         UnknownDriver(String),
     }
-
-    #[derive(Error, Debug)]
-    pub enum DecideGpioError {
-        #[error("Failed to get chip {chip:?}")]
-        ChipError {
-            //source: GpioError,
-            chip: &'static str,
-        },
-        #[error("Failed to get line")]
-        LineGetError {
-            //source: GpioError,
-            line: u32,
-        },
-        #[error("Failed to request line")]
-        LineReqError {
-            //source: GpioError,#[derive(Error, Debug)]
-            line: u32,
-        },
-        #[error("Failed to request event handle for line")]
-        LineReqEvtError {
-            //source: GpioError,
-            line: u32,
-        },
-        #[error("Failed to get lines")]
-        LinesGetError {
-            //source: GpioError,
-            lines: &'static [u32; 2],
-        },
-        #[error("Failed to request lines")]
-        LinesReqError {
-            //source: GpioError,
-            lines: &'static [u32; 2],
-        },
-        #[error("Failed to set lines")]
-        LinesSetError {
-            //source: GpioError,
-            lines: &'static [u32; 2],
-        },
-        #[error("Failed to request async event handle")]
-        AsyncLineReqError {
-            //source: GpioError,
-            line: u32,
-        },
-        #[error("Failed to monitor switch lines")]
-        SwitchMonitorError {
-            //source: GpioError,
-            lines: &'static [u32; 2],
-        },
-    }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_to_from_multipart_component() {
+        let req = Request {
+            request_type: Component(ComponentRequest::ChangeState),
+            component: Some(ComponentName("test".into())),
+            body: vec![],
+        };
+        let multipart = Multipart::from(req.clone());
+        assert_eq!(req, Request::try_from(multipart).unwrap());
+    }
+
+    #[test]
+    fn request_to_from_multipart() {
+        let req = Request {
+            request_type: General(GeneralRequest::RequestLock),
+            component: None,
+            body: vec![],
+        };
+        let multipart = Multipart::from(req.clone());
+        assert_eq!(req, Request::try_from(multipart).unwrap());
+    }
+}

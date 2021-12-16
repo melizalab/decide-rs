@@ -1,5 +1,5 @@
 use anyhow::Context;
-use decide_core::ComponentCollection;
+use decide_core::{run, ComponentCollection};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> anyhow::Result<()> {
@@ -11,9 +11,8 @@ async fn main() -> anyhow::Result<()> {
         // sets this to be the default, global collector for this application.
         .init();
 
-    tracing::debug!("hi");
-
     let (components, state_stream) =
         ComponentCollection::new().context("could not initialize controller")?;
-    decide_core::launch_decide(components, state_stream).await
+    let res = run::launch_decide(components, state_stream)?;
+    res.await
 }

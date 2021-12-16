@@ -1,5 +1,6 @@
+use anyhow::Context as AnyhowContext;
 use decide_proto::{
-    decide,
+    proto,
     error::{ClientError, ControllerError},
     ComponentName,
     ComponentRequest::{self, *},
@@ -26,35 +27,9 @@ use tracing::instrument;
 mod components;
 use components::ComponentKind;
 
-use anyhow::Context as AnyhowContext;
-use decide_proto::{PUB_ENDPOINT, REQ_ENDPOINT};
-use futures::SinkExt;
-use tmq::{publish, router, Context};
+pub mod run;
 
-pub async fn launch_decide<S>(
-    mut components: ComponentCollection,
-    mut state_stream: S,
-) -> anyhow::Result<()>
-where
-    S: Stream<Item = decide::Pub> + Unpin + Send + 'static,
-{
-    let mut router_sock = router(&Context::new()).bind(REQ_ENDPOINT)?;
-    let mut publish_sock = publish(&Context::new()).bind(PUB_ENDPOINT)?;
-
-    tokio::spawn(async move {
-        while let Some(state_update) = state_stream.next().await {
-            publish_sock.send(state_update).await.unwrap();
-        }
-    });
-
-    while let Some(request) = router_sock.next().await {
-        let reply = components.dispatch(request?).await;
-        router_sock.send(reply).await.expect("failed to send");
-    }
-    Ok(())
-}
-
-type RequestBundle = ((ComponentRequest, Vec<u8>), oneshot::Sender<decide::Reply>);
+type RequestBundle = ((ComponentRequest, Vec<u8>), oneshot::Sender<proto::Reply>);
 
 #[derive(Debug)]
 pub struct ComponentCollection {
@@ -74,9 +49,8 @@ struct ComponentsConfigItem {
 
 impl ComponentCollection {
     #[instrument]
-    pub fn new() -> anyhow::Result<(Self, impl Stream<Item = decide::Pub>)> {
-        let config_file = ProjectDirs::from("org", "meliza", "decide")
-            .ok_or_else(|| ControllerError::NoConfigDir)?
+    pub fn new() -> anyhow::Result<(Self, impl Stream<Item = Multipart>)> {
+        let config_file = ProjectDirs::from("org", "meliza", "decide").ok_or(ControllerError::NoConfigDir)?
             .config_dir()
             .join("components.yml");
         let reader = File::open(&config_file).map_err(|e| ControllerError::ConfigReadError {
@@ -88,7 +62,7 @@ impl ComponentCollection {
 
     pub fn from_reader<T: Read>(
         mut config_reader: T,
-    ) -> anyhow::Result<(Self, impl Stream<Item = decide::Pub>)> {
+    ) -> anyhow::Result<(Self, impl Stream<Item = Multipart>)> {
         let mut file_buf: Vec<u8> = Vec::new();
         config_reader
             .read_to_end(&mut file_buf)
@@ -97,9 +71,9 @@ impl ComponentCollection {
                 source: e,
             })?;
         let components_config: ComponentsConfig =
-            serde_yaml::from_slice(&file_buf[..]).map_err(|e| ControllerError::from(e))?;
+            serde_yaml::from_slice(&file_buf[..]).map_err(ControllerError::from)?;
         let config_id = Sha3_256::new().chain(&file_buf).finalize();
-        let config_id = format!("{:?}", config_id.as_slice());
+        let config_id = format!("{:x}", config_id);
         let (components, state_stream): (_, HashMap<_, _>) = components_config
             .0
             .into_iter()
@@ -119,19 +93,19 @@ impl ComponentCollection {
         ))
     }
 
-    #[instrument]
     pub async fn dispatch(&mut self, mut request: Multipart) -> Multipart {
         let client_id = request.pop_front().unwrap();
         let empty_frame = request.pop_front().unwrap();
-        let reply = decide::Reply::from(self.handle_request(request).await);
+        let reply = proto::Reply::from(self.handle_request(request).await);
         let mut reply = Multipart::from(reply);
         reply.push_front(empty_frame);
         reply.push_front(client_id);
         reply
     }
 
-    async fn handle_request(&mut self, request: Multipart) -> Result<decide::Reply> {
+    async fn handle_request(&mut self, request: Multipart) -> Result<proto::Reply> {
         let request = Request::try_from(request)?;
+        tracing::info!("Received request {:?}", request);
         match request.request_type {
             RequestType::General(req) => self.handle_general(req, request.body),
             RequestType::Component(req) => self.handle_component(req, request).await,
@@ -142,12 +116,15 @@ impl ComponentCollection {
         &mut self,
         request_type: GeneralRequest,
         payload: Vec<u8>,
-    ) -> Result<decide::Reply> {
+    ) -> Result<proto::Reply> {
         Ok(match request_type {
             RequestLock => self.request_lock(
-                decide::Config::decode(&*payload).map_err(|e| ClientError::from(e))?,
+                proto::Config::decode(&*payload).map_err(ClientError::from)?,
             )?,
             ReleaseLock => self.release_lock()?,
+            Shutdown => {
+                panic!("shutting down")
+            }
         }
         .into())
     }
@@ -156,21 +133,20 @@ impl ComponentCollection {
         &mut self,
         request_type: ComponentRequest,
         mut request: Request,
-    ) -> Result<decide::Reply> {
+    ) -> Result<proto::Reply> {
         let component_name = request.component.take().unwrap();
         let component_tx = self
             .components
-            .get_mut(&component_name)
-            .ok_or_else(|| ClientError::UnknownComponent(component_name))?;
+            .get_mut(&component_name).ok_or(ClientError::UnknownComponent(component_name))?;
         let (reply_tx, reply_rx) = oneshot::channel();
         component_tx
             .send(((request_type, request.body), reply_tx))
             .await
             .expect("could not talk over mpsc");
-        Ok(reply_rx.await.map_err(|e| ControllerError::from(e))?)
+        Ok(reply_rx.await.map_err(ControllerError::from)?)
     }
 
-    fn request_lock(&mut self, config: decide::Config) -> Result<decide::reply::Result> {
+    fn request_lock(&mut self, config: proto::Config) -> Result<proto::reply::Result> {
         if self.locked {
             Err(ClientError::AlreadyLocked.into())
         } else if self.config_id != config.identifier {
@@ -181,13 +157,13 @@ impl ComponentCollection {
             .into())
         } else {
             self.locked = true;
-            Ok(decide::reply::Result::Ok(()))
+            Ok(proto::reply::Result::Ok(()))
         }
     }
 
-    fn release_lock(&mut self) -> Result<decide::reply::Result> {
+    fn release_lock(&mut self) -> Result<proto::reply::Result> {
         self.locked = false;
-        Ok(decide::reply::Result::Ok(()))
+        Ok(proto::reply::Result::Ok(()))
     }
 }
 
@@ -195,54 +171,58 @@ fn execute(
     component: &mut ComponentKind,
     request_type: ComponentRequest,
     payload: Vec<u8>,
-) -> Result<decide::Reply> {
+) -> Result<proto::Reply> {
     Ok(match request_type {
         ChangeState => {
             let state_change =
-                decide::StateChange::decode(&*payload).map_err(|e| ClientError::from(e))?;
+                proto::StateChange::decode(&*payload).map_err(ClientError::from)?;
             component
-                .decode_and_change_state(state_change.state.ok_or_else(|| ClientError::NoState)?)?;
-            decide::reply::Result::Ok(())
+                .decode_and_change_state(state_change.state.ok_or(ClientError::NoState)?)?;
+            proto::reply::Result::Ok(())
         }
         ResetState => {
             component.reset_state()?;
-            decide::reply::Result::Ok(())
+            proto::reply::Result::Ok(())
         }
         SetParameters => {
             let params =
-                decide::ComponentParams::decode(&*payload).map_err(|e| ClientError::from(e))?;
+                proto::ComponentParams::decode(&*payload).map_err(ClientError::from)?;
             component.decode_and_set_parameters(
-                params.parameters.ok_or_else(|| ClientError::NoParameters)?,
+                params.parameters.ok_or(ClientError::NoParameters)?,
             )?;
-            decide::reply::Result::Ok(())
+            proto::reply::Result::Ok(())
         }
         GetParameters => {
             let params = component.get_encoded_parameters();
-            decide::reply::Result::Params(params)
+            proto::reply::Result::Params(params)
         }
     }
     .into())
 }
 
-fn build_pub_stream<I>(state_stream: I) -> impl Stream<Item = decide::Pub>
+fn build_pub_stream<I>(state_stream: I) -> impl Stream<Item = Multipart>
 where
-    I: IntoIterator<Item = (ComponentName, ReceiverStream<Any>)>,
+I: IntoIterator<Item = (ComponentName, ReceiverStream<Any>)>,
 {
     stream::select_all(
         state_stream
-            .into_iter()
-            .map(|(name, state_rx)| state_rx.map(move |state| (name.clone(), state))),
-    )
-    .map(|(name, state)| decide::Pub {
-        state: Some(state),
-        time: Some(Timestamp {
-            seconds: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_secs() as i64,
-            nanos: 0,
-        }),
-    })
+        .into_iter()
+        .map(|(name, state_rx)| state_rx.map(move |state| (name.clone(), state))),
+        )
+        .map(|(name, state)| {
+            let topic = String::from("state/") + &name.0;
+            let pub_message = proto::Pub {
+                state: Some(state),
+                time: Some(Timestamp {
+                    seconds: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("time went backwards")
+                        .as_secs() as i64,
+                        nanos: 0,
+                }),
+            };
+            Multipart::from(vec![topic.as_bytes(), &pub_message.encode_to_vec()[..]])
+        })
 }
 
 #[instrument]
@@ -254,11 +234,12 @@ fn init_component(
 )> {
     let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
     let (state_tx, state_rx) = mpsc::channel::<Any>(100);
+    let config = item.config.clone();
     let mut component = ComponentKind::try_from((&item.driver[..], item.config))
         .context(format!("failed to initialize {:?}", name))?;
     let name_ = name.clone();
     tokio::spawn(async move {
-        component.init(state_tx).await;
+        component.init(config, state_tx).await;
         tracing::info!("initializing {:?}", name_);
         while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
             let reply = execute(&mut component, request_type, payload);

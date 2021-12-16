@@ -13,7 +13,7 @@ use tokio::{
     time::{sleep, Duration},
 };
 
-pub mod lights {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
@@ -29,8 +29,8 @@ pub struct Lights {
 
 #[async_trait]
 impl Component for Lights {
-    type State = lights::State;
-    type Params = lights::Params;
+    type State = proto::State;
+    type Params = proto::Params;
     type Config = LightsConfig;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/lights_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/lights_params";
@@ -43,12 +43,13 @@ impl Component for Lights {
         }
     }
 
-    async fn init(&self, _config: Self::Config,sender: mpsc::Sender<Any>) {
+    async fn init(&self, _config: Self::Config, sender: mpsc::Sender<Any>) {
         let blink = self.blink.clone();
         let on = self.on.clone();
         tokio::spawn(async move {
             loop {
                 if blink.load(Ordering::Relaxed) {
+                    tracing::debug!("lights changing state");
                     let old_state = on.fetch_xor(true, Ordering::Relaxed);
                     let new_state = !old_state;
                     let state = Self::State { on: new_state };
