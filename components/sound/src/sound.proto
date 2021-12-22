@@ -3,9 +3,11 @@ syntax = "proto3";
 message State {
   bool server = 1;
   bool playing = 2;
-  string stimulus = 3;
+  string stim_path = 3;
 }
 
 message Params {
-  int32 timeout = 1;
+  string req = 1;
+  string sub = 2;
+  int32 timeout = 3;
 }
