@@ -109,11 +109,11 @@ name = "decide-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "decide-proto",
  "directories",
  "env_logger",
  "futures",
- "generic-array",
  "lights",
  "log",
  "num-traits",

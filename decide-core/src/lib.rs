@@ -1,8 +1,21 @@
+/*!
+# Crate features
+
+All are disabled by default.
+
+## Debugging features
+
+* **dummy-mode** -
+  When enabled, replaces all component structs with
+  automatically generated structs that have the same
+  State, Params, and Config, but have no internal logic.
+  In other words, they have zero side effects and their
+  state will not change unless explicitly set.
+*/
 use anyhow::Context as AnyhowContext;
 use decide_proto::{
-    proto,
     error::{ClientError, ControllerError},
-    ComponentName,
+    proto, ComponentName,
     ComponentRequest::{self, *},
     GeneralRequest::{self, *},
     Request, RequestType, Result,
@@ -50,7 +63,8 @@ struct ComponentsConfigItem {
 impl ComponentCollection {
     #[instrument]
     pub fn new() -> anyhow::Result<(Self, impl Stream<Item = Multipart>)> {
-        let config_file = ProjectDirs::from("org", "meliza", "decide").ok_or(ControllerError::NoConfigDir)?
+        let config_file = ProjectDirs::from("org", "meliza", "decide")
+            .ok_or(ControllerError::NoConfigDir)?
             .config_dir()
             .join("components.yml");
         let reader = File::open(&config_file).map_err(|e| ControllerError::ConfigReadError {
@@ -77,7 +91,25 @@ impl ComponentCollection {
         let (components, state_stream): (_, HashMap<_, _>) = components_config
             .0
             .into_iter()
-            .map(init_component)
+            .map(|(name, item)| {
+                let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
+                let (state_tx, state_rx) = mpsc::channel::<Any>(100);
+                let config = item.config.clone();
+                let mut component = ComponentKind::try_from((&item.driver[..], item.config))
+                    .context(format!("failed to initialize {:?}", name))?;
+                let name_ = name.clone();
+                tokio::spawn(async move {
+                    component.init(config, state_tx).await;
+                    tracing::info!("initializing {:?}", name_);
+                    while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
+                        let reply = execute(&mut component, request_type, payload);
+                        reply_tx
+                            .send(reply.into())
+                            .expect("controller dropped a oneshot receiver");
+                    }
+                });
+                Ok(((name.clone(), request_tx), (name, state_rx.into())))
+            })
             .collect::<anyhow::Result<Vec<_>>>()?
             .into_iter()
             .unzip();
@@ -118,9 +150,9 @@ impl ComponentCollection {
         payload: Vec<u8>,
     ) -> Result<proto::Reply> {
         Ok(match request_type {
-            RequestLock => self.request_lock(
-                proto::Config::decode(&*payload).map_err(ClientError::from)?,
-            )?,
+            RequestLock => {
+                self.request_lock(proto::Config::decode(&*payload).map_err(ClientError::from)?)?
+            }
             ReleaseLock => self.release_lock()?,
             Shutdown => {
                 panic!("shutting down")
@@ -137,7 +169,8 @@ impl ComponentCollection {
         let component_name = request.component.take().unwrap();
         let component_tx = self
             .components
-            .get_mut(&component_name).ok_or(ClientError::UnknownComponent(component_name))?;
+            .get_mut(&component_name)
+            .ok_or(ClientError::UnknownComponent(component_name))?;
         let (reply_tx, reply_rx) = oneshot::channel();
         component_tx
             .send(((request_type, request.body), reply_tx))
@@ -174,10 +207,8 @@ fn execute(
 ) -> Result<proto::Reply> {
     Ok(match request_type {
         ChangeState => {
-            let state_change =
-                proto::StateChange::decode(&*payload).map_err(ClientError::from)?;
-            component
-                .decode_and_change_state(state_change.state.ok_or(ClientError::NoState)?)?;
+            let state_change = proto::StateChange::decode(&*payload).map_err(ClientError::from)?;
+            component.decode_and_change_state(state_change.state.ok_or(ClientError::NoState)?)?;
             proto::reply::Result::Ok(())
         }
         ResetState => {
@@ -185,11 +216,9 @@ fn execute(
             proto::reply::Result::Ok(())
         }
         SetParameters => {
-            let params =
-                proto::ComponentParams::decode(&*payload).map_err(ClientError::from)?;
-            component.decode_and_set_parameters(
-                params.parameters.ok_or(ClientError::NoParameters)?,
-            )?;
+            let params = proto::ComponentParams::decode(&*payload).map_err(ClientError::from)?;
+            component
+                .decode_and_set_parameters(params.parameters.ok_or(ClientError::NoParameters)?)?;
             proto::reply::Result::Ok(())
         }
         GetParameters => {
@@ -202,51 +231,25 @@ fn execute(
 
 fn build_pub_stream<I>(state_stream: I) -> impl Stream<Item = Multipart>
 where
-I: IntoIterator<Item = (ComponentName, ReceiverStream<Any>)>,
+    I: IntoIterator<Item = (ComponentName, ReceiverStream<Any>)>,
 {
     stream::select_all(
         state_stream
-        .into_iter()
-        .map(|(name, state_rx)| state_rx.map(move |state| (name.clone(), state))),
-        )
-        .map(|(name, state)| {
-            let topic = String::from("state/") + &name.0;
-            let pub_message = proto::Pub {
-                state: Some(state),
-                time: Some(Timestamp {
-                    seconds: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("time went backwards")
-                        .as_secs() as i64,
-                        nanos: 0,
-                }),
-            };
-            Multipart::from(vec![topic.as_bytes(), &pub_message.encode_to_vec()[..]])
-        })
-}
-
-#[instrument]
-fn init_component(
-    (name, item): (ComponentName, ComponentsConfigItem),
-) -> anyhow::Result<(
-    (ComponentName, mpsc::Sender<RequestBundle>),
-    (ComponentName, ReceiverStream<Any>),
-)> {
-    let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
-    let (state_tx, state_rx) = mpsc::channel::<Any>(100);
-    let config = item.config.clone();
-    let mut component = ComponentKind::try_from((&item.driver[..], item.config))
-        .context(format!("failed to initialize {:?}", name))?;
-    let name_ = name.clone();
-    tokio::spawn(async move {
-        component.init(config, state_tx).await;
-        tracing::info!("initializing {:?}", name_);
-        while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
-            let reply = execute(&mut component, request_type, payload);
-            reply_tx
-                .send(reply.into())
-                .expect("controller dropped a oneshot receiver");
-        }
-    });
-    Ok(((name.clone(), request_tx), (name, state_rx.into())))
+            .into_iter()
+            .map(|(name, state_rx)| state_rx.map(move |state| (name.clone(), state))),
+    )
+    .map(|(name, state)| {
+        let topic = String::from("state/") + &name.0;
+        let pub_message = proto::Pub {
+            state: Some(state),
+            time: Some(Timestamp {
+                seconds: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("time went backwards")
+                    .as_secs() as i64,
+                nanos: 0,
+            }),
+        };
+        Multipart::from(vec![topic.as_bytes(), &pub_message.encode_to_vec()[..]])
+    })
 }

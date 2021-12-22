@@ -26,6 +26,7 @@ where
             .send(process_requests(components).await)
             .expect("failed to send result");
     });
+    // collect errors using oneshot receivers
     Ok(future::select_all(vec![rx_pub, rx_req]).map(|(res, _, _)| res?))
 }
 
@@ -35,7 +36,13 @@ where
 {
     let mut publish_sock = tmq::publish(&Context::new()).bind(PUB_ENDPOINT)?;
     while let Some(state_update) = state_stream.next().await {
-        publish_sock.send(state_update).await.unwrap();
+        tracing::trace!(
+            "sending pub message {:?} on topic {:?}",
+            &state_update,
+            std::str::from_utf8(state_update.iter().next().unwrap()).unwrap()
+        );
+        publish_sock.send(state_update).await?;
+        tracing::trace!("pub message sent");
     }
     Ok(())
 }

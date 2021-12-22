@@ -25,6 +25,7 @@ pub struct LightsConfig {
 pub struct Lights {
     on: Arc<AtomicBool>,
     blink: Arc<AtomicBool>,
+    state_sender: Option<mpsc::Sender<Any>>,
 }
 
 #[async_trait]
@@ -40,17 +41,19 @@ impl Component for Lights {
         Lights {
             on: Arc::new(AtomicBool::new(false)),
             blink: Arc::new(AtomicBool::new(false)),
+            state_sender: None,
         }
     }
 
-    async fn init(&self, _config: Self::Config, sender: mpsc::Sender<Any>) {
-        let blink = self.blink.clone();
-        let on = self.on.clone();
+    async fn init(&mut self, _config: Self::Config, sender: mpsc::Sender<Any>) {
+        self.state_sender = Some(sender.clone());
+        let blink = Arc::clone(&self.blink);
+        let on = Arc::clone(&self.on);
         tokio::spawn(async move {
             loop {
-                if blink.load(Ordering::Relaxed) {
+                if blink.load(Ordering::Acquire) {
                     tracing::debug!("lights changing state");
-                    let old_state = on.fetch_xor(true, Ordering::Relaxed);
+                    let old_state = on.fetch_xor(true, Ordering::AcqRel);
                     let new_state = !old_state;
                     let state = Self::State { on: new_state };
                     let message = Any {
@@ -58,31 +61,43 @@ impl Component for Lights {
                         type_url: Self::STATE_TYPE_URL.into(),
                     };
                     sender.send(message).await.unwrap();
-                    sleep(Duration::from_millis(100)).await;
                 }
+                sleep(Duration::from_millis(100)).await;
             }
         });
     }
 
     fn change_state(&mut self, state: Self::State) -> Result<(), DecideError> {
-        self.on.store(state.on, Ordering::Relaxed);
+        self.on.store(state.on, Ordering::Release);
+        let sender = self.state_sender.as_mut().cloned().unwrap();
+        tokio::spawn(async move {
+            sender
+                .send(Any {
+                    type_url: String::from(Self::STATE_TYPE_URL),
+                    value: state.encode_to_vec(),
+                })
+                .await
+                .map_err(|e| DecideError::Component { source: e.into() })
+                .unwrap();
+            tracing::trace!("state changed");
+        });
         Ok(())
     }
 
     fn set_parameters(&mut self, params: Self::Params) -> Result<(), DecideError> {
-        self.blink.store(params.blink, Ordering::Relaxed);
+        self.blink.store(params.blink, Ordering::Release);
         Ok(())
     }
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params {
-            blink: self.blink.load(Ordering::Relaxed),
+            blink: self.blink.load(Ordering::Acquire),
         }
     }
 
     fn get_state(&self) -> Self::State {
         Self::State {
-            on: self.on.load(Ordering::Relaxed),
+            on: self.on.load(Ordering::Acquire),
         }
     }
 }
