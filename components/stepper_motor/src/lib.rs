@@ -1,7 +1,6 @@
 //use std::convert::TryInto;
 //use std::os::unix::raw::dev_t;
-use decide_proto::{Component, //error::DecideError
-};
+use decide_proto::{Component, error::ComponentError as Error};
 use prost::Message;
 use prost_types::Any;
 
@@ -18,9 +17,14 @@ use tokio::{self,
                    Duration}
 };
 
-use gpio_cdev::{Chip, LineRequestFlags, AsyncLineEventHandle, EventRequestFlags, EventType, LineHandle, MultiLineHandle};
+use gpio_cdev::{Chip, LineRequestFlags,
+                AsyncLineEventHandle, EventRequestFlags,
+                EventType, LineEvent,
+                LineHandle, MultiLineHandle,
+                Error as GpioError};
 use futures::{//pin_mut, Stream,
               StreamExt};
+use log::trace;
 //use log::{info, trace, warn};
 
 pub mod stepper_motor {
@@ -55,10 +59,10 @@ impl StepperMotor {
                 let step_1_values = &Self::HALF_STEPS[step].0;
                 let step_3_values = &Self::HALF_STEPS[step].1;
                 handle1.set_values(&step_1_values.0)
-                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
+                    .map_err(|e: GpioError| Error::LinesSetError { source: (e), lines: &motor1_offsets })
                     .unwrap();
                 handle3.set_values(&step_3_values.0)
-                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
+                    .map_err(|e: GpioError| Error::LinesSetError { source: (e), lines: &motor3_offsets })
                     .unwrap();
             }
             false => {
@@ -66,10 +70,10 @@ impl StepperMotor {
                 let step_1_values = &Self::HALF_STEPS[step].0;
                 let step_3_values = &Self::HALF_STEPS[step].1;
                 handle1.set_values(&step_1_values.0)
-                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
+                    .map_err(|e: GpioError| Error::LinesSetError { source: (e), lines: &motor1_offsets })
                     .unwrap();
                 handle3.set_values(&step_3_values.0)
-                    //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
+                    .map_err(|e: GpioError| Error::LinesSetError { source: (e), lines: &motor3_offsets })
                     .unwrap();
             }
         }
@@ -78,10 +82,10 @@ impl StepperMotor {
         let step_1_values = &Self::ALL_OFF;
         let step_3_values = &Self::ALL_OFF;
         handle1.set_values(&step_1_values.0)
-            //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor1_offsets })
+            .map_err(|e: GpioError| Error::LinesSetError { source: (e), lines: &motor1_offsets })
             .unwrap();
         handle3.set_values(&step_3_values.0)
-            //.map_err(|e: GpioError| Error::LinesSetError { lines: &motor3_offsets })
+            .map_err(|e: GpioError| Error::LinesSetError { source: (e), lines: &motor3_offsets })
             .unwrap();
     }
 }
@@ -104,20 +108,20 @@ impl Component for StepperMotor {
     }
 
     async fn init(&self, config: Self::Config, state_sender: Sender<Any>) {
-        let mut chip1 = Chip::new(config.chip1).unwrap();
-            //.map_err( |e:GpioError| Error::ChipError { source: e, chip: ChipNumber::Chip1})?;
-        let mut chip3 = Chip::new(config.chip3).unwrap();
-            //.map_err( |e:GpioError| Error::ChipError {source: e, chip: ChipNumber::Chip3})?;
+        let mut chip1 = Chip::new(config.chip1)
+            .map_err( |e:GpioError| Error::ChipError { source: e, chip: &config.chip1}).unwrap();
+        let mut chip3 = Chip::new(config.chip3)
+            .map_err( |e:GpioError| Error::ChipError {source: e, chip: &config.chip3}).unwrap();
         let motor_1_handle = chip1
             .get_lines(&config.motor1_offsets)
-            .unwrap()//.map_err(|e: GpioError| Error::LinesGetError { lines: &motor1_offsets })?
-            .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper").unwrap();
-            //.map_err(|e: GpioError| Error::LinesReqError { lines: &motor1_offsets })?;
+            .map_err(|e: GpioError| Error::LinesGetError { source: e, lines: &motor1_offsets }).unwrap()
+            .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper")
+            .map_err(|e: GpioError| Error::LinesReqError { source: e, lines: &motor1_offsets }).unwrap();
         let motor_3_handle = chip3
-            .get_lines(&config.motor3_offsets).unwrap()
-            //.map_err(|e: GpioError| Error::LinesGetError { lines: &motor3_offsets })?
-            .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper").unwrap();
-            //.map_err(|e: GpioError| Error::LinesReqError { lines: &motor3_offsets })?;
+            .get_lines(&config.motor3_offsets)
+            .map_err(|e: GpioError| Error::LinesGetError { source: e, lines: &motor3_offsets })?
+            .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper")
+            .map_err(|e: GpioError| Error::LinesReqError { source: e, lines: &motor3_offsets }).unwrap();
 
         let switch = self.switch.clone();
         let on = self.on.clone();
@@ -139,7 +143,7 @@ impl Component for StepperMotor {
                             true => {StepperMotor::run_motor(&step, &motor_1_handle, &motor_3_handle, direction.load(Ordering::Acquire))}
                             false => {StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle)}
                         }}
-                    false => { //due to signal from client instead TODO: make sure client can change switch to false
+                    false => { //due to signal from client instead
                         let timer = Instant::now();
                         while Instant::now().duration_since(timer) < Duration::from_millis(*timeout) {
                             match on.load(Ordering::Acquire) {
@@ -148,6 +152,8 @@ impl Component for StepperMotor {
                             };
                             thread::sleep(Duration::from_micros(dt));
                         }
+                        //Reset switch state
+                        switch.store(true, Ordering::Release);
                     }
                 }
                 thread::sleep(Duration::from_micros(dt));
@@ -156,86 +162,52 @@ impl Component for StepperMotor {
 
         tokio::spawn(async move {
             //init switch lines
-            let line_14 = chip1.get_line(switch_offsets[0]).unwrap();
-                //.map_err(|e:GpioError| Error::LineGetError {source:e, line: 14})
-            let mut handle_14 = AsyncLineEventHandle::new(line_14.events(
-                LineRequestFlags::INPUT,
-                EventRequestFlags::BOTH_EDGES,
-                "stepper_motor_switch"
-            ).unwrap()).unwrap();//.map_err(|e: GpioError| Error::LineReqEvtError {line: 14})
-                //.map_err(|e: GpioError| Error::AsyncLineReqError {line: 14})
+            let line_14 = chip1.get_line(switch_offsets[0])
+                .map_err(|e:GpioError| Error::LineGetError {source:e, line: 14}).unwrap();
+            let mut handle_14 = AsyncLineEventHandle::new(
+                line_14.events(
+                    LineRequestFlags::INPUT,
+                    EventRequestFlags::BOTH_EDGES,
+                    "stepper_motor_switch"
+                ).map_err(|e: GpioError| Error::LineReqEvtError { source: e, line: 14}).unwrap()
+            ).map_err(|e: GpioError| Error::AsyncEvntReqError {source: e, line: 14}).unwrap();
 
             let line_15 = chip1.get_line(switch_offsets[1])
-                //.map_err(|e:GpioError| Error::LineGetError {source:e, line: 15})
+                .map_err(|e:GpioError| Error::LineGetError {source:e, line: 15})
                 .unwrap();
-            let mut handle_15 = AsyncLineEventHandle::new(line_15.events(
-                LineRequestFlags::INPUT,
-                EventRequestFlags::BOTH_EDGES,
-                "stepper_motor_switch"
-            ).unwrap()).unwrap();//.map_err(|e: GpioError| Error::LineReqEvtError {line: 15})
-                //.map_err(|e: GpioError| Error::AsyncLineReqError {line: 15})
+            let mut handle_15 = AsyncLineEventHandle::new(
+                line_15.events(
+                    LineRequestFlags::INPUT,
+                    EventRequestFlags::BOTH_EDGES,
+                    "stepper_motor_switch"
+            ).map_err(|e: GpioError| Error::LineReqEvtError {source:e, line: 15}).unwrap()
+            ).map_err(|e: GpioError| Error::AsyncEvntReqError {source:e, line: 15}).unwrap();
 
             loop {
+                let mut state = Self::State{switch: false, on: false, direction: false};
                 tokio::select! {
-                    event = handle_14.next() => {
-                        //trace!("Switch 14 pushed");
-                        match event.unwrap().unwrap().event_type() {
-                            EventType::RisingEdge => {
-                                let state = Self::State {
-                                    switch: true,
-                                    on: false,
-                                    direction: false //shouldn't matter either way, but may cause bugs
-                                };
-                                let message = Any {
-                                    value: state.encode_to_vec(),
-                                    type_url: Self::STATE_TYPE_URL.into(),
-                                };
-                                state_sender.send(message).await.unwrap();
-                            }
-                            EventType::FallingEdge => {
-                                let state = Self::State {
-                                    switch: true,
-                                    on: true,
-                                    direction: false
-                                };
-                                let message = Any {
-                                    value: state.encode_to_vec(),
-                                    type_url: Self::STATE_TYPE_URL.into(),
-                                };
-                                state_sender.send(message).await.unwrap();
-                            }
+                    Some(event) = handle_14.next() => {
+                        let evt_type = event.map_err(|e:GpioError| Error::EventReqError {source:e, line: 14})
+                                            .unwrap().event_type();
+                        match evt_type {
+                            EventType::RisingEdge => {state.switch = true}
+                            EventType::FallingEdge => {state.switch = true; state.on = true}
                         }
                     }
-                    event = handle_15.next() => {
-                        //trace!("Switch 15 pushed");
-                        match event.unwrap().unwrap().event_type() {
-                            EventType::RisingEdge => {
-                                let state = Self::State {
-                                    switch: true,
-                                    on: false,
-                                    direction: false //shouldn't matter either way, but may cause bugs
-                                };
-                                let message = Any {
-                                    value: state.encode_to_vec(),
-                                    type_url: Self::STATE_TYPE_URL.into(),
-                                };
-                                state_sender.send(message).await.unwrap();
-                            }
-                            EventType::FallingEdge => {
-                                let state = Self::State {
-                                    switch: true,
-                                    on: true,
-                                    direction: true
-                                };
-                                let message = Any {
-                                    value: state.encode_to_vec(),
-                                    type_url: Self::STATE_TYPE_URL.into(),
-                                };
-                                state_sender.send(message).await.unwrap();
-                            }
+                    Some(event) = handle_15.next() => {
+                        let evt_type = event.map_err(|e:GpioError| Error::EventReqError {source:e, line: 15})
+                                            .unwrap().event_type();
+                        match evt_type {
+                            EventType::RisingEdge => {state.switch = true;}
+                            EventType::FallingEdge => {state.switch = true; state.on = true; state.direction = true}
                         }
                     }
-                }
+                };
+                let message = Any {
+                    value: state.encode_to_vec(),
+                    type_url: Self::STATE_TYPE_URL.into(),
+                };
+                state_sender.send(message).await.unwrap();
             }
         });
     }

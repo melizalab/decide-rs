@@ -96,6 +96,7 @@ pub mod error {
     use serde_yaml::Error as YamlError;
     use thiserror::Error;
     use tokio::sync::oneshot;
+    use gpio_cdev::Error as GpioError;
 
     #[derive(Error, Debug)]
     pub enum DecideError {
@@ -165,5 +166,63 @@ pub mod error {
         ConfigDeserializationError { source: DeserializerError },
         #[error("unrecognized component driver name `{0}`")]
         UnknownDriver(String),
+    }
+
+    #[derive(Error, Debug)]
+    pub enum ComponentError {
+        #[error("Failed to open sysfs file")]
+        SysFsError {
+
+        },
+        #[error("Failed to get chip {chip:?}")]
+        ChipError {
+            source: GpioError,
+            chip: &'static String,
+        },
+        #[error("Failed to get line")]
+        LineGetError {
+            source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to request line")]
+        LineReqError {
+            source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to request event handle for line")]
+        LineReqEvtError {
+            source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to unwrap event for line")]
+        EventReqError {
+            source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to get lines")]
+        LinesGetError {
+            source: GpioError,
+            lines: &'static [u32; 2],
+        },
+        #[error("Failed to request lines")]
+        LinesReqError {
+            source: GpioError,
+            lines: &'static [u32; 2],
+        },
+        #[error("Failed to set lines")]
+        LinesSetError {
+            source: GpioError,
+            lines: &'static [u32; 2],
+        },
+        #[error("Failed to request async event handle")]
+        AsyncEvntReqError {
+            source: GpioError,
+            line: u32,
+        },
+        #[error("Failed to monitor switch lines")]
+        SwitchMonitorError {
+            source: GpioError,
+            lines: &'static [u32; 2],
+        }
     }
 }
