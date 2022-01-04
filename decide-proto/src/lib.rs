@@ -202,17 +202,17 @@ pub mod error {
         #[error("Failed to get lines")]
         LinesGetError {
             source: GpioError,
-            lines: &'static [u32; 2],
+            lines: &'static Vec<u32>,
         },
         #[error("Failed to request lines")]
         LinesReqError {
             source: GpioError,
-            lines: &'static [u32; 2],
+            lines: &'static Vec<u32>,
         },
         #[error("Failed to set lines")]
         LinesSetError {
             source: GpioError,
-            lines: &'static [u32; 2],
+            //lines: &'static Vec<u32>, TODO: find a way to get offsets from a multilinehandle
         },
         #[error("Failed to request async event handle")]
         AsyncEvntReqError {
@@ -222,7 +222,7 @@ pub mod error {
         #[error("Failed to monitor switch lines")]
         SwitchMonitorError {
             source: GpioError,
-            lines: &'static [u32; 2],
+            lines: &'static Vec<u32>,
         }
     }
 }

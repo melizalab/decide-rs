@@ -10,6 +10,7 @@ decide-proto = { path = "../../decide-proto" }
 prost = "0.9"
 prost-types = "0.9"
 serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1.29"
 
 tokio = { version = "1.12", features = ["full"] }
 async-trait = "0.1.51"

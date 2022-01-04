@@ -1,4 +1,4 @@
-use decide_proto::{Component, //error::DecideError
+use decide_proto::{Component, error::{DecideError, ComponentError}
 };
 use prost::Message;
 use prost_types::Any;
@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use async_trait::async_trait;
 use tokio::{self,
-            sync::mpsc::{Sender},
+            sync::mpsc::{self, Sender},
             time::{sleep, Duration}
 };
 
@@ -30,7 +30,8 @@ pub struct HouseLight {
     switch: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
     brightness: Arc<AtomicU8>,
-    interval: Arc<AtomicU32>
+    interval: Arc<AtomicU32>,
+    state_sender: Option<mpsc::Sender<Any>>,
 }
 
 #[async_trait]
@@ -46,11 +47,13 @@ impl Component for HouseLight {
             switch: Arc::new(AtomicBool::new(false)),
             fake_clock: Arc::new(AtomicBool::new(false)),
             brightness: Arc::new(AtomicU8::new(0)),
-            interval: Arc::new(AtomicU32::new(300))
+            interval: Arc::new(AtomicU32::new(300)),
+            state_sender: None,
         }
     }
 
-    async fn init(&self, config: Self::Config, state_sender: Sender<Any>) {
+    async fn init(&mut self, config: Self::Config, state_sender: Sender<Any>) {
+        self.state_sender = Some(sender.clone());
         let switch = self.switch.clone();
         let fake_clock = self.fake_clock.clone();
         let brightness = self.brightness.clone();
@@ -66,16 +69,17 @@ impl Component for HouseLight {
             let max_brightness = config.max_brightness;
             loop {
                 if switch.load(Ordering::Relaxed) {
-                    let ephemera = fake_clock.load(Ordering::Relaxed);
-                    let altitude = HouseLight::calc_altitude(ephemera, dawn, dusk);
+                    let fake_clock = fake_clock.load(Ordering::Relaxed);
+                    let altitude = HouseLight::calc_altitude(fake_clock, dawn, dusk);
                     let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
                     device.write(&[new_brightness]).unwrap();
-
+                    tracing::trace!("Brightness written to sysfs file");
                     brightness.store(new_brightness, Ordering::Relaxed);
+
                     let state = Self::State {
                         switch: true,
-                        fake_clock: ephemera,
+                        fake_clock,
                         brightness: new_brightness as i32
                     };
                     let message = Any {
@@ -90,9 +94,24 @@ impl Component for HouseLight {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
+        let sender = self.state_sender.as_mut().cloned().unwrap();
+
         self.switch.store(state.switch, Ordering::Relaxed);
         self.fake_clock.store(state.fake_clock, Ordering::Relaxed);
         self.brightness.store(state.brightness as u8, Ordering::Relaxed);
+
+        tokio::spawn(async move {
+            sender
+                .send(Any {
+                    type_url: String::from(Self::STATE_TYPE_URL),
+                    value: state.encode_to_vec(),
+                })
+                .await
+                .map_err(|e| DecideError::Component { source: e.into() })
+                .unwrap();
+            tracing::trace!("state changed");
+        });
+
         Ok(())
     }
 

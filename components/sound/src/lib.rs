@@ -1,13 +1,13 @@
-use decide_proto::{Component};
+use decide_proto::{Component, error::DecideError};
 use prost::Message;
 use prost_types::Any;
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, Ordering}};
+use std::sync::{Mutex, Arc, atomic::{AtomicBool, AtomicU8, Ordering}};
 use std::thread;
 use serde::Deserialize;
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use tokio::{self,
-            sync::mpsc::{Sender},
+            sync::mpsc,
             time::{//sleep,
                    Duration}
 };
@@ -18,8 +18,9 @@ use tmq::{Context, publish, subscribe, request, dealer};
 pub struct AudioPlayer {
     server: Arc<AtomicBool>, //'running' or 'stopped'
     playing: Arc<AtomicBool>,
-    stim_path: Arc<&'static str>,
-    timeout: Arc<AtomicU8>
+    stim_path: Arc<Mutex<String>>,
+    timeout: Arc<AtomicU8>,
+    state_sender: Option<mpsc::Sender<Any>>,
 }
 pub mod sound {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
@@ -37,12 +38,18 @@ impl Component for AudioPlayer {
         AudioPlayer {
             server: Arc::new(AtomicBool::new(false)),
             playing: Arc::new(AtomicBool::new(false)),
-            stim_path: Arc::new(".wav"),
-            timeout: Arc::new(AtomicU8::new(Default::default()))
+            stim_path: Arc::new(Mutex::new(String::from(".wav"))),
+            timeout: Arc::new(AtomicU8::new(Default::default())),
+            state_sender: None,
         }
     }
 
-    async fn init(&self, _config: Self::Config, state_sender: Sender<Any>) {
+    async fn init(&mut self, _config: Self::Config, state_sender: mpsc::Sender<Any>) {
+        self.state_sender = Some(sender.clone());
+        let server = self.server.clone();
+        let playing = self.playing.clone();
+        let mut stim_path = self.stim_path.clone();
+
         tokio::spawn(async move {
             let jstim_contxt = tmq::Context::new();
             let mut dealer_soc = dealer(&jstim_contxt)
@@ -51,26 +58,43 @@ impl Component for AudioPlayer {
                 .connect(Self::Params::sub).unwrap()
                 .subscribe(b"").unwrap();
             while let Some(multprt) = sub_soc.next().await {
-                let mut state = Self::State {server:true, playing: true, stim_path: "none"};
+                tracing::trace!("Jstim subscription msg received");
+                let mut stim_path = stim_path.lock().unwrap();
                 let mut multipart = multprt.unwrap()
                     .iter()
                     .map(|part| part.as_str())
                     .collect::<Vec<&str>>();
                 if multipart[0] == "PLAYING" {
-                    state = Self::State { server:true, playing:true, stim_path: multipart[1] };
+                    server.store(true, Ordering::Release);
+                    playing.store(true, Ordering::Release);
+                    *stim_path = String::from(multipart[1]);
                 } else {
                     match multipart[0] {
                         "DONE" => {
-                            state = Self::State { server:true, playing:false, stim_path };},
+                            server.store(true, Ordering::Release);
+                            playing.store(false, Ordering::Release);
+                            *stim_path = String::from("None");
+                        },
                         "STOPPING" => {
-                            println!("jstimserver shut down; stimuli won't be playing");
-                            state = Self::State { server:false, playing:false, stim_path };},
+                            tracing::info!("jstimserver shut down; stimuli won't be playing");
+                            server.store(false, Ordering::Release);
+                            playing.store(false, Ordering::Release);
+                            *stim_path = String::from("None");
+                        },
                         "STARTING" => {
-                            println!("jstimserver reconnected");
-                            state = AudioPlayer::update_stims(&dealer_soc);}
-                        _ => {println!("Unexpected msg from jstimserver {:?}", multipart)}
+                            tracing::info!("jstimserver reconnected");
+                            server.store(true, Ordering::Release);
+                            playing.store(true, Ordering::Release);
+                            *stim_path = AudioPlayer::update_stims(&dealer_soc);
+                        },
+                        _ => {tracing::error!("Unexpected msg from jstimserver {:?}", multipart)}
                     }
                 }
+                let mut state = Self::State {
+                    server: server.load(Ordering::Acquire),
+                    playing: playing.load(Ordering::Acquire),
+                    stim_path: stim_path.clone(),
+                };
                 let message = Any {
                     value: state.encode_to_vec(),
                     type_url: Self::STATE_TYPE_URL.into(),
@@ -83,7 +107,20 @@ impl Component for AudioPlayer {
     fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
         self.server.store(state.server, Ordering::Release);
         self.playing.store(state.playing, Ordering::Release);
-        self.stim_path = state.stim_path;
+        let mut stim_path = self.stim_path.try_lock().unwrap();
+        *stim_path = state.stim_path;
+        let sender = self.state_sender.as_mut().cloned().unwrap();
+        tokio::spawn(async move {
+            sender
+                .send(Any {
+                    type_url: String::from(Self::STATE_TYPE_URL),
+                    value: state.encode_to_vec(),
+                })
+                .await
+                .map_err(|e| DecideError::Component { source: e.into() })
+                .unwrap();
+            tracing::trace!("state changed");
+        });
         Ok(())
     }
 
@@ -93,10 +130,11 @@ impl Component for AudioPlayer {
     }
 
     fn get_state(&self) -> Self::State {
+        let stim_path = self.stim_path.try_lock().unwrap();
         Self::State {
             server: self.server.load(Ordering::Acquire),
             playing: self.playing.load(Ordering::Acquire),
-            stim_path: self.stim_path.clone(),
+            stim_path: stim_path.clone(),
         }
     }
 
@@ -108,20 +146,15 @@ impl Component for AudioPlayer {
 }
 
 impl AudioPlayer {
-    fn update_stims(mut dealer: &dealer::Dealer) -> Self::State{
+    fn update_stims(mut dealer: &dealer::Dealer) -> String{
         dealer.send("STIMLIST").await.unwrap();
         let mut jstim_resp = dealer.next().await.unwrap().unwrap();
         let mut stims = Vec::new();
         while let Some(message) = jstim_resp.pop_front().unwrap() {
             stims.push(message.as_str())
         };
-
-        println!("Received stimulus list of {:?} from jstim server", stims.len());
-        Self::State {
-            server: true,
-            playing: true,
-            stim_path: stims[1]
-        }
+        tracing::info!("Received stimulus list of {:?} from jstim server", stims.len());
+        String::from(stims[1])
     }
 }
 
