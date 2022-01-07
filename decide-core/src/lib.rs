@@ -35,6 +35,8 @@ use std::{fs::File, io::Read};
 use tmq::Multipart;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
+#[macro_use]
+extern crate tracing;
 use tracing::instrument;
 
 mod components;
@@ -101,7 +103,7 @@ impl ComponentCollection {
                 let name_ = name.clone();
                 tokio::spawn(async move {
                     component.init(config).await;
-                    tracing::info!("initializing {:?}", name_);
+                    info!("initializing {:?}", name_);
                     while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
                         let reply = execute(&mut component, request_type, payload);
                         reply_tx
@@ -114,7 +116,7 @@ impl ComponentCollection {
             .collect::<anyhow::Result<Vec<_>>>()?
             .into_iter()
             .unzip();
-        tracing::info!("components initialized");
+        info!("components initialized");
         let pub_stream = build_pub_stream(state_stream);
         Ok((
             ComponentCollection {
@@ -138,7 +140,7 @@ impl ComponentCollection {
 
     async fn handle_request(&mut self, request: Multipart) -> Result<proto::Reply> {
         let request = Request::try_from(request)?;
-        tracing::info!("Received request {:?}", request);
+        info!("Received request {:?}", request);
         match request.request_type {
             RequestType::General(req) => self.handle_general(req, request.body),
             RequestType::Component(req) => self.handle_component(req, request).await,

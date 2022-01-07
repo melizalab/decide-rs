@@ -62,11 +62,10 @@ macro_rules! impl_components {
                             }
                         }
 
-                        async fn init(&mut self, _config: Self::Config) {
-                        }
+                        async fn init(&mut self, _config: Self::Config) { }
 
                         fn change_state(&mut self, state: Self::State) -> Result<()> {
-                            tracing::trace!("changing state");
+                            trace!("changing state");
                             self.state = state.clone();
                             let sender = self.state_sender.clone();
                             tokio::spawn(async move {
@@ -74,7 +73,7 @@ macro_rules! impl_components {
                                     type_url: String::from(Self::STATE_TYPE_URL),
                                     value: state.encode_to_vec()
                                 }).await.map_err(|e| DecideError::Component{ source: e.into() }).unwrap();
-                                tracing::trace!("state changed");
+                                trace!("state changed");
                             });
                             Ok(())
                         }

@@ -36,13 +36,13 @@ where
 {
     let mut publish_sock = tmq::publish(&Context::new()).bind(PUB_ENDPOINT)?;
     while let Some(state_update) = state_stream.next().await {
-        tracing::trace!(
+        trace!(
             "sending pub message {:?} on topic {:?}",
             &state_update,
             std::str::from_utf8(state_update.iter().next().unwrap()).unwrap()
         );
         publish_sock.send(state_update).await?;
-        tracing::trace!("pub message sent");
+        trace!("pub message sent");
     }
     Ok(())
 }

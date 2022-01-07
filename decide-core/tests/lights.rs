@@ -10,19 +10,21 @@ use prost::Message;
 use prost_types::Any;
 use tmq::{request, subscribe, Context, Multipart};
 use tokio::test;
+#[macro_use]
+extern crate tracing;
 
 async fn send_request(message: Request) -> anyhow::Result<reply::Result> {
     let ctx = Context::new();
-    tracing::trace!("trying to connect");
+    trace!("trying to connect");
     let req_sock = request(&ctx).connect(REQ_ENDPOINT)?;
-    tracing::trace!("connected");
+    trace!("connected");
 
     let message = Multipart::from(message);
-    tracing::trace!("trying to send message");
+    trace!("trying to send message");
     let reply_sock = req_sock.send(message).await?;
-    tracing::trace!("sent message");
+    trace!("sent message");
     let (multipart, _req) = reply_sock.recv().await?;
-    tracing::trace!("received reply");
+    trace!("received reply");
     let reply = Reply::from(multipart);
     println!("{:?}", reply);
     Ok(reply.result.unwrap())
@@ -34,7 +36,7 @@ fn pub_stream(topic: &[u8]) -> anyhow::Result<impl Stream<Item = Pub>> {
         .subscribe(topic)?
         .map(|message| {
             let mut message = message.unwrap();
-            tracing::trace!("received pub {:?}", &message);
+            trace!("received pub {:?}", &message);
             let _topic = message.pop_front().unwrap();
             let encoded_pub = message.pop_front().unwrap();
             Pub::decode(&encoded_pub[..]).expect("could not decode protobuf")
@@ -133,7 +135,7 @@ async fn state() {
     let mut state_stream = pub_stream(b"state/house-lights").unwrap();
     let result = send_request(request).await.unwrap();
     assert_eq!(result, reply::Result::Ok(()));
-    tracing::trace!("waiting for pub");
+    trace!("waiting for pub");
     let state_update = state_stream.next().await.unwrap();
     assert_eq!(state_update.state.unwrap(), state);
 }

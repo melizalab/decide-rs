@@ -12,6 +12,8 @@ use tokio::{
     sync::mpsc,
     time::{sleep, Duration},
 };
+#[macro_use]
+extern crate tracing;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
@@ -53,7 +55,7 @@ impl Component for Lights {
         tokio::spawn(async move {
             loop {
                 if blink.load(Ordering::Acquire) {
-                    tracing::debug!("lights changing state");
+                    debug!("lights changing state");
                     let old_state = on.fetch_xor(true, Ordering::AcqRel);
                     let new_state = !old_state;
                     let state = Self::State { on: new_state };
@@ -80,7 +82,7 @@ impl Component for Lights {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("state changed");
+            trace!("state changed");
         });
         Ok(())
     }
