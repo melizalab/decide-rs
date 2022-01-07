@@ -95,11 +95,12 @@ impl ComponentCollection {
                 let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
                 let (state_tx, state_rx) = mpsc::channel::<Any>(100);
                 let config = item.config.clone();
-                let mut component = ComponentKind::try_from((&item.driver[..], item.config))
-                    .context(format!("failed to initialize {:?}", name))?;
+                let mut component =
+                    ComponentKind::from_name(&item.driver[..], item.config, state_tx)
+                        .with_context(|| format!("failed to initialize {:?}", name))?;
                 let name_ = name.clone();
                 tokio::spawn(async move {
-                    component.init(config, state_tx).await;
+                    component.init(config).await;
                     tracing::info!("initializing {:?}", name_);
                     while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
                         let reply = execute(&mut component, request_type, payload);

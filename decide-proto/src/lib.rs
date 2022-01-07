@@ -37,8 +37,8 @@ pub trait Component {
     const STATE_TYPE_URL: &'static str;
     const PARAMS_TYPE_URL: &'static str;
 
-    fn new(config: Self::Config) -> Self;
-    async fn init(&mut self, config: Self::Config, state_sender: mpsc::Sender<Any>);
+    fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self;
+    async fn init(&mut self, config: Self::Config);
     fn change_state(&mut self, state: Self::State) -> Result<()>;
     fn set_parameters(&mut self, params: Self::Params) -> Result<()>;
     fn get_state(&self) -> Self::State;

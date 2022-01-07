@@ -7,7 +7,6 @@ macro_rules! impl_components {
             use decide_proto::{error::ControllerError, Component, Result};
             use prost_types::Any;
             use serde_value::Value;
-            use std::convert::TryFrom;
             use tokio::sync::mpsc;
 
             mod types {
@@ -41,7 +40,7 @@ macro_rules! impl_components {
                         state: <RealComponent as Component>::State,
                         params: <RealComponent as Component>::Params,
                         _config: <RealComponent as Component>::Config,
-                        state_sender: Option<mpsc::Sender<Any>>,
+                        state_sender: mpsc::Sender<Any>,
                     }
 
                     #[async_trait]
@@ -52,25 +51,24 @@ macro_rules! impl_components {
                         const STATE_TYPE_URL: &'static str = <RealComponent as Component>::STATE_TYPE_URL;
                         const PARAMS_TYPE_URL: &'static str = <RealComponent as Component>::PARAMS_TYPE_URL;
 
-                        fn new(config: Self::Config) -> Self {
+                        fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
                             let state = Self::State::default();
                             let params = Self::Params::default();
                             $component {
                                 state,
                                 params,
                                 _config: config,
-                                state_sender: None,
+                                state_sender,
                             }
                         }
 
-                        async fn init(&mut self, _config: Self::Config, sender: mpsc::Sender<Any>) {
-                            self.state_sender = Some(sender);
+                        async fn init(&mut self, _config: Self::Config) {
                         }
 
                         fn change_state(&mut self, state: Self::State) -> Result<()> {
                             tracing::trace!("changing state");
                             self.state = state.clone();
-                            let sender = self.state_sender.as_mut().cloned().unwrap();
+                            let sender = self.state_sender.clone();
                             tokio::spawn(async move {
                                 sender.send(Any {
                                     type_url: String::from(Self::STATE_TYPE_URL),
@@ -101,47 +99,45 @@ macro_rules! impl_components {
                 pub fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.decode_and_change_state(message)
+                            ComponentKind::$component(t) => t.decode_and_change_state(message),
                          )*
                     }
                 }
                 pub fn decode_and_set_parameters(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.decode_and_set_parameters(message)
+                            ComponentKind::$component(t) => t.decode_and_set_parameters(message),
                          )*
                     }
                 }
                 pub fn reset_state(&mut self) -> Result<()> {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.reset_state()
+                            ComponentKind::$component(t) => t.reset_state(),
                          )*
                     }
                 }
                 pub fn get_encoded_parameters(&self) -> Any {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.get_encoded_parameters()
+                            ComponentKind::$component(t) => t.get_encoded_parameters(),
                          )*
                     }
                 }
-                pub async fn init(&mut self, config: Value, sender: mpsc::Sender<Any>) {
+                pub async fn init(&mut self, config: Value) {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.init(types::$component::deserialize_config(config).unwrap(), sender).await,
+                            ComponentKind::$component(t) => t.init(types::$component::deserialize_config(config).unwrap()).await,
                         )*
                     }
                 }
-            }
 
-            impl TryFrom<(&str, Value)> for ComponentKind {
-                type Error = anyhow::Error;
-                fn try_from((driver_name, config): (&str, Value)) -> anyhow::Result<Self> {
+                pub fn from_name<S: AsRef<str>>(driver_name: S, config: Value, sender: mpsc::Sender<Any>) -> anyhow::Result<Self> {
+                    let driver_name = driver_name.as_ref();
                     match driver_name {
                         $(
                             stringify!($component) => Ok(ComponentKind::$component(
-                                    types::$component::new(types::$component::deserialize_config(config)?)
+                                    types::$component::new(types::$component::deserialize_config(config)?, sender)
                                     )),
                         )*
                             _ => Err(ControllerError::UnknownDriver(driver_name.into()).into()),
