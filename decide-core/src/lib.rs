@@ -13,7 +13,7 @@ All are disabled by default.
   state will not change unless explicitly set.
 */
 use anyhow::Context as AnyhowContext;
-use decide_proto::{
+use decide_protocol::{
     error::{ClientError, ControllerError},
     proto, ComponentName,
     ComponentRequest::{self, *},

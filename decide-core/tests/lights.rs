@@ -1,5 +1,5 @@
-use decide_proto::Component;
-use decide_proto::{
+use decide_protocol::{
+    Component,
     proto::{reply, ComponentParams, Config, Pub, Reply, StateChange},
     ComponentName, ComponentRequest, GeneralRequest, Request, RequestType, PUB_ENDPOINT,
     REQ_ENDPOINT,

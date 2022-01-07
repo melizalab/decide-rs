@@ -1,5 +1,5 @@
 use super::ComponentCollection;
-use decide_proto::{PUB_ENDPOINT, REQ_ENDPOINT};
+use decide_protocol::{PUB_ENDPOINT, REQ_ENDPOINT};
 use futures::{
     future::{self, Future, FutureExt},
     SinkExt, Stream, StreamExt,

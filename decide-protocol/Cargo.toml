@@ -1,5 +1,5 @@
 [package]
-name = "decide-proto"
+name = "decide-protocol"
 version = "0.1.0"
 authors = ["Jonah Weissman <jonahrweissman@gmail.com>"]
 edition = "2018"

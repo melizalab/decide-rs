@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-    "decide-proto",
+    "decide-protocol",
     "decide-core",
     "components/lights",
 ]

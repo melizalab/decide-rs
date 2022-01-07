@@ -4,7 +4,7 @@ macro_rules! impl_components {
     ($($component:ident),*) => {
         pub use component_kind::ComponentKind;
         mod component_kind {
-            use decide_proto::{error::ControllerError, Component, Result};
+            use decide_protocol::{error::ControllerError, Component, Result};
             use prost_types::Any;
             use serde_value::Value;
             use tokio::sync::mpsc;
@@ -27,7 +27,7 @@ macro_rules! impl_components {
 
             #[cfg(feature = "dummy-mode")]
             mod dummy {
-                use decide_proto::{Result, Component, error::DecideError};
+                use decide_protocol::{Result, Component, error::DecideError};
                 use tokio::sync::mpsc;
                 use async_trait::async_trait;
                 use prost_types::Any;
