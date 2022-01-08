@@ -1,7 +1,6 @@
 use decide_protocol::{
-    Component,
     proto::{reply, ComponentParams, Config, Pub, Reply, StateChange},
-    ComponentName, ComponentRequest, GeneralRequest, Request, RequestType, PUB_ENDPOINT,
+    Component, ComponentName, ComponentRequest, GeneralRequest, Request, RequestType, PUB_ENDPOINT,
     REQ_ENDPOINT,
 };
 use futures::{Stream, StreamExt};

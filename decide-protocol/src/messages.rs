@@ -95,12 +95,12 @@ impl From<Request> for Multipart {
     fn from(request: Request) -> Self {
         match request.component {
             None => Multipart::from(vec![
-                &DECIDE_VERSION[..],
+                DECIDE_VERSION,
                 &[request.request_type.to_u8().unwrap()],
                 &request.body,
             ]),
             Some(component) => Multipart::from(vec![
-                &DECIDE_VERSION[..],
+                DECIDE_VERSION,
                 &[request.request_type.to_u8().unwrap()],
                 &request.body,
                 component.0.as_bytes(),
@@ -144,7 +144,7 @@ impl TryFrom<Multipart> for Request {
 
 impl From<proto::Reply> for Multipart {
     fn from(reply: proto::Reply) -> Self {
-        vec![&DECIDE_VERSION[..], &reply.encode_to_vec()].into()
+        vec![DECIDE_VERSION, &reply.encode_to_vec()].into()
     }
 }
 
@@ -158,7 +158,7 @@ impl From<Multipart> for proto::Reply {
 
 impl From<proto::Pub> for Multipart {
     fn from(pub_message: proto::Pub) -> Self {
-        vec![&DECIDE_VERSION[..], &pub_message.encode_to_vec()].into()
+        vec![DECIDE_VERSION, &pub_message.encode_to_vec()].into()
     }
 }
 

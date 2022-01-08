@@ -6,7 +6,7 @@ use serde::{de::DeserializeOwned, Deserialize};
 use serde_value::{DeserializerError, Value, ValueDeserializer};
 use tokio::sync::mpsc;
 
-pub const DECIDE_VERSION: [u8; 3] = [0xDC, 0xDC, 0x01];
+pub const DECIDE_VERSION: &[u8] = "DCDC01".as_bytes();
 
 pub const REQ_ENDPOINT: &str = "tcp://127.0.0.1:7897";
 pub const PUB_ENDPOINT: &str = "tcp://127.0.0.1:7898";
