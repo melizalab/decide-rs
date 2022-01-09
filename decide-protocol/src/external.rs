@@ -1,9 +1,14 @@
-use super::{proto, ClientError, ComponentName, DecideError, Result, DECIDE_VERSION};
+use super::{error::ClientError, proto, ComponentName, DecideError, Result};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use prost::Message as ProstMessage;
 use std::convert::TryFrom;
 use tmq::Multipart;
+
+pub const DECIDE_VERSION: &[u8] = b"DCDC01";
+
+pub const REQ_ENDPOINT: &str = "tcp://127.0.0.1:7897";
+pub const PUB_ENDPOINT: &str = "tcp://127.0.0.1:7898";
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Request {
