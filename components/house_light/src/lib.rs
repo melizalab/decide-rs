@@ -14,13 +14,14 @@ use tokio::{self,
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{self, Utc, DateTime, Timelike};
-//use std::cmp::{min,max};
 use sun;
 
 use std::fs::OpenOptions;
-use std::io::{//self,prelude::*,
-              Write};
+use std::io::{Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, AtomicU8};
+use tokio::io::AsyncWriteExt;
+use decide_proto::error::ComponentError::FileAccessError;
 
 pub mod house_light {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
@@ -63,7 +64,8 @@ impl Component for HouseLight {
             let mut device = OpenOptions::new()
                 .write(true)
                 .read(true)
-                .open(config.device_path).unwrap();
+                .open(Path::new(&config.device_path))
+                .map_err(|e| FileAccessError {source:e, dir: &config.device_path});
             let dawn = config.fake_dawn;
             let dusk = config.fake_dusk;
             let max_brightness = config.max_brightness;

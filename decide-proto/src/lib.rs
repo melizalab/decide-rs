@@ -170,9 +170,10 @@ pub mod error {
 
     #[derive(Error, Debug)]
     pub enum ComponentError {
-        #[error("Failed to open sysfs file")]
-        SysFsError {
-
+        #[error("Failed to open file")]
+        FileAccessError {
+            source: std::io::Error,
+            dir: &'static String,
         },
         #[error("Failed to get chip {chip:?}")]
         ChipError {
@@ -223,6 +224,16 @@ pub mod error {
         SwitchMonitorError {
             source: GpioError,
             lines: &'static Vec<u32>,
+        },
+        #[error("Failed to create PCM stream")]
+        PCM_InitErr {
+            source: alsa::pcm::Error,
+            dev_name: &'static String,
+        },
+        #[error("Failed to configure PCM stream HW Params")]
+        PCM_HwConfigErr {
+            source: alsa::pcm::Error,
+            param: &'static str,
         }
     }
 }

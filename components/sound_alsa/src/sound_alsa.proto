@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+message State {
+
+}
+
+message Params {
+  string playback_dir = 1;
+  uint32 audio_bitrate = 2;
+}
