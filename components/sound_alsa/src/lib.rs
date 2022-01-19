@@ -102,18 +102,21 @@ impl Component for AlsaPlayback {
             }
             tracing::trace!("imported audio files");
             //Todo: send init
-            'thread: loop {
+            'playlist: loop {
                 let playlist = playlist.lock().unwrap();
-                'queue: for stim in playlist.iter() {
+                'stim: for stim in playlist.iter() {
                     if stim.ends_with("wav")  {
                         *filename.get_mut().unwrap() = stim.clone();
                         *playback.get_mut().unwrap() = "PLAYING".to_string();
                         io.writei(&*queue[stim.into()]).unwrap();
-                        while pcm.state() == State::Running {
-                            if playback.get_mut() == "PAUSE".to_string() {
-                                pcm.pause(true).unwrap();
-
-                            }
+                        'playback: while pcm.state() == State::Running {
+                            match playback.try_lock().unwrap().as_str() {
+                                "PAUSE" => {pcm.pause(true)}
+                                "NEXT"=> {pcm.drop(); continue 'stim}
+                                "STOP" => {pcm.drop(); continue 'playlist}
+                                "PLAYING" => {continue 'playback}
+                                _ => {tracing::error!("invalid playback command"); continue 'playback}
+                            };
                         }
 
                     }
@@ -123,41 +126,68 @@ impl Component for AlsaPlayback {
 
     }
 
-    fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
-        todo!()
+    fn change_state(&mut self, mut state: Self::State) -> decide_proto::Result<()> {
+        *self.playlist.get_mut() = state.playlist;
+        *self.playback.get_mut() = state.playback;
+        state.filename = self.filename.try_lock().unwrap().clone();
+
+        let sender = self.state_sender.as_mut().cloned().unwrap();
+        tokio::spawn(async move {
+            sender
+                .send(Any {
+                    type_url: String::from(Self::STATE_TYPE_URL),
+                    value: state.encode_to_vec(),
+                })
+                .await
+                .map_err(|e| DecideError::Component { source: e.into() })
+                .unwrap();
+            tracing::trace!("state changed");
+        });
+        Ok(())
     }
 
     fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
-        todo!()
+        *self.dir.get_mut() = params.dir;
+        Ok(())
     }
 
     fn get_state(&self) -> Self::State {
-        todo!()
+        Self::State {
+            playlist: self.playlist.try_lock().unwrap().clone(),
+            filename: self.filename.try_lock().unwrap().clone(),
+            playback: self.playback.try_lock().unwrap().clone()
+        }
     }
 
     fn get_parameters(&self) -> Self::Params {
-        todo!()
+        Self::Params {
+            dir : self.dir.try_lock().unwrap().clone()
+        }
+
     }
 }
 
 fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) -> Vec<i16>{
     let mut result = Vec::new();
     if wav_channels == 1 {
-        let wav = wav.frames::<[i16;1]>()
+        result = wav.frames::<[i16;1]>()
             .map(Result::unwrap)
             .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 0.8))
             .map(|note|
                 if hw_channels == 2 {[note, note]}
                 else if hw_channels == 1 {[note]})
-            .collect::<Vec<_>>();
+            .flatten()
+            .map(|e| e[0])
+            .collect::<Vec<i16>>();
     } else if wav_channels == 2 {
-        let wav = wav.frames::<[i16;2]>()
+        result = wav.frames::<[i16;2]>()
             .map(Result::unwrap)
             .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 0.8))
             .map(|note|
                 if hw_channels == 2 {[note]}
                 else if hw_channels == 1 {[note[0]]})
-            .collect::<Vec<_>>();
+            .map(|e| e[0])
+            .collect::<Vec<i16>>();
     };
     result
 }
