@@ -227,12 +227,10 @@ pub mod error {
         },
         #[error("Failed to create PCM stream")]
         PCM_InitErr {
-            source: alsa::pcm::Error,
             dev_name: &'static String,
         },
         #[error("Failed to configure PCM stream HW Params")]
         PCM_HwConfigErr {
-            source: alsa::pcm::Error,
             param: &'static str,
         }
     }

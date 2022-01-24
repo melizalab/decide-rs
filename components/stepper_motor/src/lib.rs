@@ -55,7 +55,7 @@ impl StepperMotor {
     ];
     fn run_motor(mut step: &usize, mut handle1: &MultiLineHandle, mut handle3: &MultiLineHandle, direction: bool) {
         if direction {
-            &step = (&step + 1) % Self::NUM_HALF_STEPS;
+            step = &((step + 1) % Self::NUM_HALF_STEPS);
             let step_1_values = &Self::HALF_STEPS[step].0;
             let step_3_values = &Self::HALF_STEPS[step].1;
             handle1.set_values(&step_1_values.0)
@@ -114,14 +114,14 @@ impl Component for StepperMotor {
             .map_err( |e:GpioError| Error::ChipError {source: e, chip: &config.chip3}).unwrap();
         let motor_1_handle = chip1
             .get_lines(&config.motor1_offsets)
-            .map_err(|e: GpioError| Error::LinesGetError { source: e, lines: &motor1_offsets }).unwrap()
+            .map_err(|e: GpioError| Error::LinesGetError { source: e, lines: config.motor1_offsets }).unwrap()
             .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper")
-            .map_err(|e: GpioError| Error::LinesReqError { source: e, lines: &motor1_offsets }).unwrap();
+            .map_err(|e: GpioError| Error::LinesReqError { source: e, lines: config.motor1_offsets }).unwrap();
         let motor_3_handle = chip3
             .get_lines(&config.motor3_offsets)
-            .map_err(|e: GpioError| Error::LinesGetError { source: e, lines: &motor3_offsets })?
+            .map_err(|e: GpioError| Error::LinesGetError { source: e, lines: config.motor3_offsets })?
             .request(LineRequestFlags::OUTPUT, &[0, 0], "stepper")
-            .map_err(|e: GpioError| Error::LinesReqError { source: e, lines: &motor3_offsets }).unwrap();
+            .map_err(|e: GpioError| Error::LinesReqError { source: e, lines: config.motor3_offsets }).unwrap();
 
         let switch = self.switch.clone();
         let on = self.on.clone();
@@ -133,12 +133,12 @@ impl Component for StepperMotor {
 
         //Thread handles motor running and stopping
         let motor_thread_sender = self.state_sender.as_mut().cloned().unwrap();
-        let _motor_thread = thread::spawn(move || { //TODO: switch to tokio::spawn thread macro instead of thread::spawn
+        let _motor_thread = thread::spawn( async move || { //TODO: switch to tokio::spawn thread macro instead of thread::spawn
             let mut step: usize = 0;
             StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
             loop {
                 //determine if motor is on due to starboard switches or not
-                if switch.load(Odering::Acquire) {
+                if switch.load(Ordering::Acquire) {
                     match on.load(Ordering::Acquire) {
                         true => {StepperMotor::run_motor(&step, &motor_1_handle, &motor_3_handle, direction.load(Ordering::Acquire))}
                         false => {StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle)}
@@ -282,7 +282,7 @@ impl Component for StepperMotor {
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params{
-            timeout: self.timeout.clone()
+            timeout: self.timeout.clone() as i32
         }
     }
 }

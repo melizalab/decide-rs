@@ -11,8 +11,6 @@ use tokio::{self,
             time::{//sleep,
                    Duration}
 };
-use regex::Regex;
-use simple_logger::*; //TODO: is logger necessary
 use tmq::{Context, publish, subscribe, request, dealer};
 
 pub struct AudioPlayer {
@@ -45,7 +43,7 @@ impl Component for AudioPlayer {
     }
 
     async fn init(&mut self, _config: Self::Config, state_sender: mpsc::Sender<Any>) {
-        self.state_sender = Some(sender.clone());
+        self.state_sender = Some(state_sender.clone());
         let server = self.server.clone();
         let playing = self.playing.clone();
         let mut stim_path = self.stim_path.clone();
@@ -62,7 +60,7 @@ impl Component for AudioPlayer {
                 let mut stim_path = stim_path.lock().unwrap();
                 let mut multipart = multprt.unwrap()
                     .iter()
-                    .map(|part| part.as_str())
+                    .map(|part| part.as_str().unwrap())
                     .collect::<Vec<&str>>();
                 if multipart[0] == "PLAYING" {
                     server.store(true, Ordering::Release);
@@ -125,7 +123,7 @@ impl Component for AudioPlayer {
     }
 
     fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
-        self.timeout.store(params.timeout, Ordering::Release);
+        self.timeout.store(params.timeout.try_into().unwrap(), Ordering::Release);
         Ok(())
     }
 
@@ -140,13 +138,13 @@ impl Component for AudioPlayer {
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params {
-            timeout: self.timeout.load(Ordering::Acquire),
+            timeout: self.timeout.load(Ordering::Acquire) as i32,
         }
     }
 }
 
 impl AudioPlayer {
-    fn update_stims(mut dealer: &dealer::Dealer) -> String{
+    async fn update_stims(mut dealer: &dealer::Dealer) -> String{
         dealer.send("STIMLIST").await.unwrap();
         let mut jstim_resp = dealer.next().await.unwrap().unwrap();
         let mut stims = Vec::new();

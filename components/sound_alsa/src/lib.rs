@@ -13,6 +13,7 @@ use std::sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc, Mutex};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
 use std::thread;
+use std::time::Duration;
 use tokio::{self, sync::mpsc};
 use tokio::sync::mpsc::Sender;
 
@@ -69,18 +70,18 @@ impl Component for AlsaPlayback {
 
         thread::spawn(move|| {
             let pcm = PCM::new(&*config.audio_device, Direction::Playback, false)
-                .map_err(|e| PCM_InitErr { source: e, dev_name: &config.audio_device }).unwrap();
+                .map_err(|e| PCM_InitErr {  dev_name: &config.audio_device }).unwrap();
 
             let hwp = HwParams::any(&pcm)
-                .map_err(|e| PCM_HwConfigErr {source:e, param: "init"}).unwrap();
+                .map_err(|e| PCM_HwConfigErr {param: "init"}).unwrap();
             hwp.set_channels(config.channel)
-                .map_err(|e| PCM_HwConfigErr {source: e, param: "channel"}).unwrap();
+                .map_err(|e| PCM_HwConfigErr { param: "channel"}).unwrap();
             hwp.set_rate(config.sample_rate, ValueOr::Nearest)
-                .map_err(|e| PCM_HwConfigErr {source:e, param: "sample_rate"}).unwrap();
+                .map_err(|e| PCM_HwConfigErr {param: "sample_rate"}).unwrap();
             hwp.set_access(Access::RWInterleaved)
-                .map_err(|e| PCM_HwConfigErr {source:e, param: "access"}).unwrap();
+                .map_err(|e| PCM_HwConfigErr {param: "access"}).unwrap();
             hwp.set_format(Format::s16())
-                .map_err(|e| PCM_HwConfigErr {source:e, param: "format"}).unwrap();
+                .map_err(|e| PCM_HwConfigErr {param: "format"}).unwrap();
 
             let swp = pcm.sw_params_current().unwrap();
             swp.set_start_threshold(hwp.get_buffer_size().unwrap()).unwrap();
@@ -104,23 +105,30 @@ impl Component for AlsaPlayback {
             //Todo: send init
             'playlist: loop {
                 let playlist = playlist.lock().unwrap();
-                'stim: for stim in playlist.iter() {
-                    if stim.ends_with("wav")  {
-                        *filename.get_mut().unwrap() = stim.clone();
-                        *playback.get_mut().unwrap() = "PLAYING".to_string();
-                        io.writei(&*queue[stim.into()]).unwrap();
-                        'playback: while pcm.state() == State::Running {
-                            match playback.try_lock().unwrap().as_str() {
-                                "PAUSE" => {pcm.pause(true)}
-                                "NEXT"=> {pcm.drop(); continue 'stim}
-                                "STOP" => {pcm.drop(); continue 'playlist}
-                                "PLAYING" => {continue 'playback}
-                                _ => {tracing::error!("invalid playback command"); continue 'playback}
-                            };
-                        }
+                let p = playback.lock().unwrap();
+                if p == "PLAYING" {
+                    'stim: for stim in playlist.iter() {
+                        if stim.ends_with("wav")  {
+                            *filename.get_mut().unwrap() = stim.clone();
+                            pcm.hw_params(&hwp).unwrap();
+                            io.writei(&*queue[stim.into()]).unwrap();
+                            'playback: while pcm.state() == State::Running {
+                                let p = playback.try_lock().unwrap().as_str();
+                                match p {
+                                    "PAUSE" => {pcm.pause(true)}
+                                    "NEXT"=> {
+                                        pcm.drop();
+                                        *playback.get_mut().unwrap() = "PLAYING".to_string();
+                                        continue 'stim}
+                                    "STOP" => {pcm.drop(); continue 'playlist}
+                                    "PLAYING" => {continue 'playback}
+                                    _ => {tracing::error!("invalid playback command"); continue 'playback}
+                                };
+                            }
 
+                        }
                     }
-                }
+                } else {thread::sleep(Duration::from_millis(10)); continue 'playlist}
             }
         });
 

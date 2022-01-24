@@ -7,7 +7,5 @@ message State {
 }
 
 message Params {
-  string req = 1;
-  string sub = 2;
   int32 timeout = 3;
 }

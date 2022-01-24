@@ -54,7 +54,7 @@ impl Component for HouseLight {
     }
 
     async fn init(&mut self, config: Self::Config, state_sender: Sender<Any>) {
-        self.state_sender = Some(sender.clone());
+        self.state_sender = Some(state_sender.clone());
         let switch = self.switch.clone();
         let fake_clock = self.fake_clock.clone();
         let brightness = self.brightness.clone();
@@ -65,7 +65,8 @@ impl Component for HouseLight {
                 .write(true)
                 .read(true)
                 .open(Path::new(&config.device_path))
-                .map_err(|e| FileAccessError {source:e, dir: &config.device_path});
+                .map_err(|e| FileAccessError {source:e, dir: &config.device_path.clone()})
+                .unwrap();
             let dawn = config.fake_dawn;
             let dusk = config.fake_dusk;
             let max_brightness = config.max_brightness;
