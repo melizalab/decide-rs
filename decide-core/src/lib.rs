@@ -13,7 +13,7 @@ All are disabled by default.
   state will not change unless explicitly set.
 */
 use anyhow::Context as AnyhowContext;
-use decide_proto::{
+use decide_protocol::{
     error::{ClientError, ControllerError},
     proto, ComponentName,
     ComponentRequest::{self, *},
@@ -35,6 +35,8 @@ use std::{fs::File, io::Read};
 use tmq::Multipart;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
+#[macro_use]
+extern crate tracing;
 use tracing::instrument;
 
 mod components;
@@ -95,12 +97,13 @@ impl ComponentCollection {
                 let (request_tx, mut request_rx) = mpsc::channel::<RequestBundle>(100);
                 let (state_tx, state_rx) = mpsc::channel::<Any>(100);
                 let config = item.config.clone();
-                let mut component = ComponentKind::try_from((&item.driver[..], item.config))
-                    .context(format!("failed to initialize {:?}", name))?;
+                let mut component =
+                    ComponentKind::from_name(&item.driver[..], item.config, state_tx)
+                        .with_context(|| format!("failed to initialize {:?}", name))?;
                 let name_ = name.clone();
                 tokio::spawn(async move {
-                    component.init(config, state_tx).await;
-                    tracing::info!("initializing {:?}", name_);
+                    component.init(config).await;
+                    info!("initializing {:?}", name_);
                     while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
                         let reply = execute(&mut component, request_type, payload);
                         reply_tx
@@ -113,7 +116,7 @@ impl ComponentCollection {
             .collect::<anyhow::Result<Vec<_>>>()?
             .into_iter()
             .unzip();
-        tracing::info!("components initialized");
+        info!("components initialized");
         let pub_stream = build_pub_stream(state_stream);
         Ok((
             ComponentCollection {
@@ -137,7 +140,7 @@ impl ComponentCollection {
 
     async fn handle_request(&mut self, request: Multipart) -> Result<proto::Reply> {
         let request = Request::try_from(request)?;
-        tracing::info!("Received request {:?}", request);
+        info!("Received request {:?}", request);
         match request.request_type {
             RequestType::General(req) => self.handle_general(req, request.body),
             RequestType::Component(req) => self.handle_component(req, request).await,

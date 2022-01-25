@@ -87,30 +87,42 @@ A request consists of the following zmq frames:
 
 #### Change state (0x00)
 
-Requests a modification to the state of the component specified by `name`. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
+Requests that the state of the component specified in frame 4 be set to the state given in the request body. The request body should be a `StateChange` protocol buffer. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
 
 #### Reset state (0x01)
 
-Requests that the state of the component specified by `name` be reset to its default value. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
+Requests that the state of the component specified in frame 4 be reset to its default value. The request body should be empty. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
 
 #### Set parameters (0x02)
 
+Requests that the parameters of the component specified in frame 4 be set to the state given in the
+request body. The request body should be a `ComponentParams` protocol buffer.
+
 #### Get component parameters (0x12)
 
-#### Get component state type (0x13)
+Requests that the controller reply with the parameters of the component specified in frame 4. The
+request body should be empty.
 
-#### Lock experiment (0x20)
+#### Lock controller (0x20)
 
-#### Unlock experiment (0x21)
+Request a lock on the controller. If no other experiment currently has a lock, the lock will be
+granted. Otherwise, the controller will reply with an error. Note that experiments can still interact with the controller without having lock. Experiments should require that they have a lock on the controller if they will be the primary client sending commands to the controller in order to prevent conflicting experiments from running simultaneously. The request body should be a `Config` protocol buffer, which contains the SHA3 hash of the `components.yml` file used for the controller's configuration.
+
+#### Unlock controller (0x21)
+
+Unlock the controller. The request body should be empty.
 
 #### Shutdown (0x22)
+
+Shutdown the controller. The request body should be empty. The controller will shutdown immediately
+without replying.
 
 ### REP messages
 
 For each REQ message, the `controller` must respond with a REP consisting of the following zmq frames:
 
 - Frame 0: Empty (zero bytes, invisible to REQ application)
-- Frame 3: Reply body (message type dependent)
+- Frame 1: Reply body (`Reply` protocol buffer)
 
 ```protocol-buffer
 /* These are the reply types */

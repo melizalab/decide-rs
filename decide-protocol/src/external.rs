@@ -1,9 +1,14 @@
-use super::{proto, ClientError, ComponentName, DecideError, Result, DECIDE_VERSION};
+use super::{error::ClientError, proto, ComponentName, DecideError, Result};
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use prost::Message as ProstMessage;
 use std::convert::TryFrom;
 use tmq::Multipart;
+
+pub const DECIDE_VERSION: &[u8] = b"DCDC01";
+
+pub const REQ_ENDPOINT: &str = "tcp://127.0.0.1:7897";
+pub const PUB_ENDPOINT: &str = "tcp://127.0.0.1:7898";
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Request {
@@ -95,12 +100,12 @@ impl From<Request> for Multipart {
     fn from(request: Request) -> Self {
         match request.component {
             None => Multipart::from(vec![
-                &DECIDE_VERSION[..],
+                DECIDE_VERSION,
                 &[request.request_type.to_u8().unwrap()],
                 &request.body,
             ]),
             Some(component) => Multipart::from(vec![
-                &DECIDE_VERSION[..],
+                DECIDE_VERSION,
                 &[request.request_type.to_u8().unwrap()],
                 &request.body,
                 component.0.as_bytes(),
@@ -144,7 +149,7 @@ impl TryFrom<Multipart> for Request {
 
 impl From<proto::Reply> for Multipart {
     fn from(reply: proto::Reply) -> Self {
-        vec![&DECIDE_VERSION[..], &reply.encode_to_vec()].into()
+        vec![DECIDE_VERSION, &reply.encode_to_vec()].into()
     }
 }
 
@@ -158,7 +163,7 @@ impl From<Multipart> for proto::Reply {
 
 impl From<proto::Pub> for Multipart {
     fn from(pub_message: proto::Pub) -> Self {
-        vec![&DECIDE_VERSION[..], &pub_message.encode_to_vec()].into()
+        vec![DECIDE_VERSION, &pub_message.encode_to_vec()].into()
     }
 }
 

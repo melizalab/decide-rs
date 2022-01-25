@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use decide_proto::{error::DecideError, Component};
+use decide_protocol::{error::DecideError, Component};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
@@ -12,11 +12,14 @@ use tokio::{
     sync::mpsc,
     time::{sleep, Duration},
 };
+#[macro_use]
+extern crate tracing;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 pub struct LightsConfig {
     pin: u8,
@@ -25,7 +28,7 @@ pub struct LightsConfig {
 pub struct Lights {
     on: Arc<AtomicBool>,
     blink: Arc<AtomicBool>,
-    state_sender: Option<mpsc::Sender<Any>>,
+    state_sender: mpsc::Sender<Any>,
 }
 
 #[async_trait]
@@ -36,23 +39,23 @@ impl Component for Lights {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/lights_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/lights_params";
 
-    fn new(config: Self::Config) -> Self {
+    fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
         println!("Lights with config {:?}", config);
         Lights {
             on: Arc::new(AtomicBool::new(false)),
             blink: Arc::new(AtomicBool::new(false)),
-            state_sender: None,
+            state_sender,
         }
     }
 
-    async fn init(&mut self, _config: Self::Config, sender: mpsc::Sender<Any>) {
-        self.state_sender = Some(sender.clone());
+    async fn init(&mut self, _config: Self::Config) {
         let blink = Arc::clone(&self.blink);
         let on = Arc::clone(&self.on);
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             loop {
                 if blink.load(Ordering::Acquire) {
-                    tracing::debug!("lights changing state");
+                    debug!("lights changing state");
                     let old_state = on.fetch_xor(true, Ordering::AcqRel);
                     let new_state = !old_state;
                     let state = Self::State { on: new_state };
@@ -69,7 +72,7 @@ impl Component for Lights {
 
     fn change_state(&mut self, state: Self::State) -> Result<(), DecideError> {
         self.on.store(state.on, Ordering::Release);
-        let sender = self.state_sender.as_mut().cloned().unwrap();
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             sender
                 .send(Any {
@@ -79,7 +82,7 @@ impl Component for Lights {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("state changed");
+            trace!("state changed");
         });
         Ok(())
     }

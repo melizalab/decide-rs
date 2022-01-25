@@ -238,7 +238,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "decide-proto",
+ "decide-protocol",
  "directories",
  "env_logger",
  "futures",
@@ -266,7 +266,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "decide-proto"
+name = "decide-protocol"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -607,7 +607,7 @@ name = "lights"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "decide-proto",
+ "decide-protocol",
  "prost",
  "prost-build",
  "prost-types",
