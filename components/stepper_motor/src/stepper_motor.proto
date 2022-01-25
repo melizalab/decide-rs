@@ -7,5 +7,5 @@ message State {
 }
 
 message Params {
-  int32 timeout = 1;
+  uint64 timeout = 1;
 }

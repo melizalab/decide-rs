@@ -1,28 +1,22 @@
-use decide_proto::{Component, error::{DecideError, ComponentError}
-};
-use prost::Message;
-use prost_types::Any;
-
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use serde::Deserialize;
+use std::sync::atomic::{AtomicU32, AtomicU8};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use chrono::{self, DateTime, Timelike, Utc};
+use prost::Message;
+use prost_types::Any;
+use serde::Deserialize;
+use sun;
 use tokio::{self,
             sync::mpsc::{self, Sender},
-            time::{sleep, Duration}
+            time::{Duration, sleep}
 };
-
-use std::time::{SystemTime, UNIX_EPOCH};
-use chrono::{self, Utc, DateTime, Timelike};
-use sun;
-
-use std::fs::OpenOptions;
-use std::io::{Write};
-use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU8};
-use tokio::io::AsyncWriteExt;
-use decide_proto::error::ComponentError::FileAccessError;
-
+use decide_proto::{Component, error::{ComponentError::FileAccessError, DecideError}
+};
 pub mod house_light {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
@@ -61,11 +55,12 @@ impl Component for HouseLight {
         let interval = self.interval.clone();
 
         tokio::spawn(async move {
+            let dev_path = config.device_path;
             let mut device = OpenOptions::new()
                 .write(true)
                 .read(true)
-                .open(Path::new(&config.device_path))
-                .map_err(|e| FileAccessError {source:e, dir: &config.device_path.clone()})
+                .open(Path::new(&dev_path))
+                .map_err(|e| FileAccessError {source:e, dir: dev_path.clone()})
                 .unwrap();
             let dawn = config.fake_dawn;
             let dusk = config.fake_dusk;

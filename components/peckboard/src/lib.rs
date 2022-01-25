@@ -1,7 +1,7 @@
 use gpio_cdev::{Chip, AsyncLineEventHandle,
                 LineRequestFlags,
                 MultiLineHandle,
-                EventRequestFlags, EventType,
+                EventRequestFlags,
                 errors::Error as GpioError
 };
 use futures::stream::StreamExt;
@@ -49,12 +49,12 @@ impl Component for PeckLeds {
     const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_params";
 
     fn new(config: Self::Config) -> Self {
-        let mut chip4 = Chip::new(config.peckboard_chip)
-            .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: &config.peckboard_chip}).unwrap();
-        let handles = chip4.get_lines(&config.led_offsets)
-            .map_err(|e:GpioError| ComponentError::LinesGetError {source:e, lines: &config.led_offsets}).unwrap()
+        let mut chip4 = Chip::new(config.peckboard_chip.clone())
+            .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.peckboard_chip.clone()}).unwrap();
+        let handles = chip4.get_lines(&config.led_offsets.clone())
+            .map_err(|e:GpioError| ComponentError::LinesGetError {source:e, lines: config.led_offsets.clone()}).unwrap()
             .request(LineRequestFlags::OUTPUT, &[], "PeckLeds")
-            .map_err(|e:GpioError| ComponentError::LinesReqError {source:e, lines: &config.led_offsets }).unwrap();
+            .map_err(|e:GpioError| ComponentError::LinesReqError {source:e, lines: config.led_offsets.clone()}).unwrap();
         PeckLeds {
             handles,
             led_state: LedColor::Off,
@@ -134,27 +134,27 @@ impl Component for PeckKeys {
     async fn init(&mut self, config: Self::Config, sender: Sender<Any>) {
         self.state_sender = Some(sender.clone());
         tokio::spawn(async move {
-            let mut chip2 = Chip::new(config.interrupt_chip)
-                .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: &config.interrupt_chip}).unwrap();
-            let interrupt_offset = chip2.get_line(config.interrupt_offset)
-                .map_err(|e:GpioError| ComponentError::LineGetError {source:e, line: config.interrupt_offset}).unwrap();
+            let mut chip2 = Chip::new(&config.interrupt_chip)
+                .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.interrupt_chip.clone()}).unwrap();
+            let interrupt_offset = chip2.get_line(config.interrupt_offset.clone())
+                .map_err(|e:GpioError| ComponentError::LineGetError {source:e, line: config.interrupt_offset.clone()}).unwrap();
             let mut interrupt = AsyncLineEventHandle::new(interrupt_offset.events(
                 LineRequestFlags::INPUT,
                 EventRequestFlags::BOTH_EDGES,
                 "Peckboard Interrupt"
             ).unwrap())
-                .map_err(|e:GpioError| ComponentError::AsyncEvntReqError {source:e, line:config.interrupt_offset}).unwrap();
+                .map_err(|e:GpioError| ComponentError::AsyncEvntReqError {source:e, line:config.interrupt_offset.clone()}).unwrap();
 
-            let mut chip4 = Chip::new(config.peckboard_chip)
-                .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: &config.peckboard_chip}).unwrap();
+            let mut chip4 = Chip::new(config.peckboard_chip.clone())
+                .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.peckboard_chip.clone()}).unwrap();
             chip4.get_lines(&config.ir_offsets)
-                .map_err(|e:GpioError|ComponentError::LinesGetError {source:e, lines: &config.ir_offsets}).unwrap()
+                .map_err(|e:GpioError|ComponentError::LinesGetError {source:e, lines: config.ir_offsets.clone()}).unwrap()
                 .request(LineRequestFlags::OUTPUT, &[1,1,1], "peckboard_ir")
-                .map_err(|e:GpioError| ComponentError::LinesReqError {source:e, lines: &config.ir_offsets}).unwrap();
+                .map_err(|e:GpioError| ComponentError::LinesReqError {source:e, lines: config.ir_offsets.clone()}).unwrap();
             let key_handles: MultiLineHandle = chip4.get_lines(&config.key_offsets)
-                .map_err(|e:GpioError| ComponentError::LinesGetError {source:e, lines: &config.key_offsets}).unwrap()
+                .map_err(|e:GpioError| ComponentError::LinesGetError {source:e, lines: config.key_offsets.clone()}).unwrap()
                 .request(LineRequestFlags::INPUT, &[0,0,0], "peck_keys")
-                .map_err(|e: GpioError| ComponentError::LinesReqError {source:e, lines: &config.key_offsets}).unwrap();
+                .map_err(|e: GpioError| ComponentError::LinesReqError {source:e, lines: config.key_offsets.clone()}).unwrap();
             tracing::trace!("PeckKey Handles created");
 
             loop {

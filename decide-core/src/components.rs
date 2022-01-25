@@ -105,7 +105,7 @@ macro_rules! impl_components {
                 pub fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(
-                            ComponentKind::$component(t) => t.decode_and_change_state(message)
+                            ComponentKind::$component(t) => t.decode_and_change_state(message),
                          )*
                     }
                 }

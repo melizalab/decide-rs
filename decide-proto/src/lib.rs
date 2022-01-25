@@ -173,12 +173,12 @@ pub mod error {
         #[error("Failed to open file")]
         FileAccessError {
             source: std::io::Error,
-            dir: &'static String,
+            dir: String,
         },
         #[error("Failed to get chip {chip:?}")]
         ChipError {
             source: GpioError,
-            chip: &'static String,
+            chip: String,
         },
         #[error("Failed to get line")]
         LineGetError {
@@ -203,12 +203,12 @@ pub mod error {
         #[error("Failed to get lines")]
         LinesGetError {
             source: GpioError,
-            lines: &'static Vec<u32>,
+            lines: Vec<u32>,
         },
         #[error("Failed to request lines")]
         LinesReqError {
             source: GpioError,
-            lines: &'static Vec<u32>,
+            lines: Vec<u32>,
         },
         #[error("Failed to set lines")]
         LinesSetError {
@@ -223,15 +223,15 @@ pub mod error {
         #[error("Failed to monitor switch lines")]
         SwitchMonitorError {
             source: GpioError,
-            lines: &'static Vec<u32>,
+            lines: Vec<u32>,
         },
         #[error("Failed to create PCM stream")]
-        PCM_InitErr {
-            dev_name: &'static String,
+        PcmInitErr {
+            dev_name: String,
         },
         #[error("Failed to configure PCM stream HW Params")]
-        PCM_HwConfigErr {
-            param: &'static str,
+        PcmHwConfigErr {
+            param: String,
         }
     }
 }
