@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::read_dir;
 use std::path::Path;
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, Ordering}, Mutex};
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Acquire;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -17,12 +15,12 @@ use prost_types::Any;
 use serde::Deserialize;
 use tokio::{self, sync::mpsc};
 use tokio::sync::mpsc::Sender;
-use wav::{bit_depth, BitDepth};
 
-use decide_proto::{Component,
-                   error::{ComponentError, DecideError}
+use decide_protocol::{Component,
+                      error::{ComponentError, DecideError}
 };
-use decide_proto::error::ComponentError::{FileAccessError, PcmHwConfigErr, PcmInitErr};
+use futures::executor::block_on;
+use sound_alsa::state::PlayBack;
 
 pub mod sound_alsa {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
@@ -38,8 +36,9 @@ pub struct AlsaPlayback {
     //mode: Arc<Mutex<String>>,
     dir: Arc<Mutex<String>>,
     audio_id: Arc<Mutex<String>>,
-    playback: Arc<Mutex<String>>, //pause or resume
-    state_sender: Option<mpsc::Sender<Any>>,
+    playback: Arc<Mutex<PlayBack>>, //pause or resume
+    elapsed: Arc<Mutex<Option<prost_types::Duration>>>,
+    state_sender: mpsc::Sender<Any>,
 }
 
 #[async_trait]
@@ -50,36 +49,40 @@ impl Component for AlsaPlayback {
     const STATE_TYPE_URL: &'static str = "";
     const PARAMS_TYPE_URL: &'static str = "";
 
-    fn new(config: Self::Config) -> Self {
+    fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
         AlsaPlayback{
             //mode: Arc::new(Mutex::new("".to_string())),
             dir: Arc::new(Mutex::new("".to_string())),
             audio_id: Arc::new(Mutex::new(String::from("None"))),
-            playback: Arc::new(Mutex::new(String::from("Stop"))),
-            state_sender: None,
+            playback: Arc::new(Mutex::new(PlayBack::Stop)),
+            elapsed: Arc::new(Mutex::new(Some(prost_types::Duration{
+                seconds:0, nanos:0
+            }))),
+            state_sender,
         }
     }
 
-    async fn init(&mut self, config: Self::Config, state_sender: Sender<Any>) {
-        self.state_sender = Some(state_sender.clone());
+    async fn init(&mut self, config: Self::Config) {
         let dir = self.dir.clone();
-        let mut audio_id = self.audio_id.clone();
-        let mut playback = self.playback.clone();
+        let audio_id = self.audio_id.clone();
+        let playback = self.playback.clone();
+        let elapsed = self.elapsed.clone();
+        let sender = self.state_sender.clone();
 
         thread::spawn(move|| {
             let pcm = PCM::new(&*config.audio_device, Direction::Playback, false)
-                .map_err(|e| PcmInitErr {  dev_name: config.audio_device.clone() }).unwrap();
+                .map_err(|_e| ComponentError::PcmInitErr {  dev_name: config.audio_device.clone() }).unwrap();
 
             let hwp = HwParams::any(&pcm)
-                .map_err(|e| PcmHwConfigErr {param: String::from("init")}).unwrap();
+                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("init")}).unwrap();
             hwp.set_channels(config.channel)
-                .map_err(|e| PcmHwConfigErr { param: String::from("channel")}).unwrap();
+                .map_err(|_e| ComponentError::PcmHwConfigErr { param: String::from("channel")}).unwrap();
             hwp.set_rate(config.sample_rate, ValueOr::Nearest)
-                .map_err(|e| PcmHwConfigErr {param: String::from("sample_rate")}).unwrap();
+                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("sample_rate")}).unwrap();
             hwp.set_access(Access::RWInterleaved)
-                .map_err(|e| PcmHwConfigErr {param: String::from("access")}).unwrap();
+                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("access")}).unwrap();
             hwp.set_format(Format::s16())
-                .map_err(|e| PcmHwConfigErr {param: String::from("format")}).unwrap();
+                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("format")}).unwrap();
 
             let swp = pcm.sw_params_current().unwrap();
             swp.set_start_threshold(hwp.get_buffer_size().unwrap()).unwrap();
@@ -87,13 +90,13 @@ impl Component for AlsaPlayback {
             let io = pcm.io_i16().unwrap();
 
             let mut queue: HashMap<OsString, Vec<i16>> = std::collections::HashMap::new();
-            let dir = dir.lock().unwrap().as_str();
-            for result in read_dir(Path::new(dir)).unwrap() {
+            let dir = dir.lock().unwrap().clone();
+            for result in read_dir(Path::new(&dir)).unwrap() {
                 let entry = result.unwrap();
                 let path = entry.path();
                 let file = entry.file_name();
                 if path.extension().unwrap() == "wav" {
-                    let mut wav = audrey::open(path).unwrap();
+                    let wav = audrey::open(path).unwrap();
                     let wav_channels = wav.description().channel_count() ;
                     let hw_channels = config.channel.clone();
                     let audio = process_audio(wav, wav_channels, hw_channels);
@@ -102,23 +105,52 @@ impl Component for AlsaPlayback {
             }
             tracing::trace!("imported audio files");
             //Todo: send init
-            loop {
+            'stim: loop {
                 let stim = audio_id.lock().unwrap();
-                let p = playback.lock().unwrap().as_str();
-                if p == "PLAYING" {
+                let p = playback.lock().unwrap().clone();
+                if p == PlayBack::Playing {
                     if stim.ends_with("wav")  {
+                        let stim = OsString::from(stim.clone());
+                        let mut elapsed = elapsed.lock().unwrap();
                         pcm.hw_params(&hwp).unwrap();
-                        io.writei(&*queue[&OsString::from(stim)]).unwrap();
+                        io.writei(&*queue[&stim]).unwrap();
+                        let timer = std::time::Instant::now();
                         'playback: while pcm.state() == State::Running {
-                            let p = playback.try_lock().unwrap().as_str();
+                            let p = playback.try_lock().unwrap().clone();
                             match p {
-                                "NEXT"=> {
-                                    pcm.drop();
-                                    *playback.get_mut().unwrap() = "PLAYING".to_string();
-                                    continue}
-                                "STOP" => {pcm.drop(); continue}
-                                "PLAYING" => {continue 'playback}
-                                _ => {tracing::error!("invalid playback command"); continue 'playback}
+                                PlayBack::Next => {
+                                    pcm.drop().unwrap();
+                                    let duration = Some(prost_types::Duration::from(timer.elapsed()));
+                                    *elapsed = duration.clone();
+                                    let mut playback = playback.lock().unwrap();
+                                    *playback = PlayBack::Playing;
+                                    let state = Self::State {
+                                        audio_id: audio_id.lock().unwrap().clone(),
+                                        playback: PlayBack::Playing as i32,
+                                        elapsed: duration
+                                    };
+                                    let message = Any {
+                                        value: state.encode_to_vec(),
+                                        type_url: Self::STATE_TYPE_URL.into(),
+                                    };
+                                    block_on(sender.send(message)).unwrap_err();
+                                    continue 'stim}
+                                PlayBack::Stop => {
+                                    let duration = Some(prost_types::Duration::from(timer.elapsed()));
+                                    *elapsed = duration.clone();
+                                    pcm.drop().unwrap();
+                                    let state = Self::State {
+                                        audio_id: String::from("None"),
+                                        playback: PlayBack::Stop as i32,
+                                        elapsed: duration
+                                    };
+                                    let message = Any {
+                                        value: state.encode_to_vec(),
+                                        type_url: Self::STATE_TYPE_URL.into(),
+                                    };
+                                    block_on(sender.send(message)).unwrap();
+                                    continue 'stim}
+                                PlayBack::Playing => {continue 'playback}
                             };
                         }
                     }
@@ -128,11 +160,15 @@ impl Component for AlsaPlayback {
 
     }
 
-    fn change_state(&mut self, mut state: Self::State) -> decide_proto::Result<()> {
-        *self.playback.get_mut().unwrap() = state.playback;
-        state.audio_id = self.audio_id.try_lock().unwrap().clone();
+    fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
+        let mut playback = self.playback.lock().unwrap();
+        *playback = PlayBack::from_i32(state.playback).unwrap();
+        let mut audio_id = self.audio_id.lock().unwrap();
+        *audio_id = state.audio_id.clone();
+        let mut elapsed = self.elapsed.lock().unwrap();
+        *elapsed = state.elapsed.clone();
 
-        let sender = self.state_sender.as_mut().cloned().unwrap();
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             sender
                 .send(Any {
@@ -147,15 +183,17 @@ impl Component for AlsaPlayback {
         Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
-        *self.dir.get_mut().unwrap() = params.dir;
+    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
+        let mut dir = self.dir.lock().unwrap();
+        *dir = params.dir;
         Ok(())
     }
 
     fn get_state(&self) -> Self::State {
         Self::State {
             audio_id: self.audio_id.try_lock().unwrap().clone(),
-            playback: self.playback.try_lock().unwrap().clone()
+            playback: self.playback.try_lock().unwrap().clone() as i32,
+            elapsed: self.elapsed.try_lock().unwrap().clone(),
         }
     }
 
@@ -173,22 +211,28 @@ fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) ->
         result = wav.frames::<[i16;1]>()
             .map(Result::unwrap)
             .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 0.8))
-            .map(|note|
-                if hw_channels == 2 {return [note, note]}
-                else {return [note]} //hw_channels = 1
-            )
-            .flatten()
-            .map(|e| e[0])
+            .map(|note| note[0])
             .collect::<Vec<i16>>();
+        if hw_channels == 2 {
+            result = result.iter()
+                .map(|note| [note, note])
+                .flatten()
+                .map(|f| *f )
+                .collect::<Vec<_>>()
+        }
     } else if wav_channels == 2 {
         result = wav.frames::<[i16;2]>()
             .map(Result::unwrap)
             .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 0.8))
-            .map(|note|
-                if hw_channels == 2 {[note]}
-                else{[note[0]]})
-            .map(|e| e[0])
+            .flatten()
             .collect::<Vec<i16>>();
+        if hw_channels == 1 {
+            result = result.iter()
+                .enumerate()
+                .filter(|f| f.0 % 2 == 0)
+                .map(|f| *f.1)
+                .collect::<Vec<_>>()
+        }
     };
     result
 }

@@ -7,7 +7,7 @@ use gpio_cdev::{Chip, AsyncLineEventHandle,
 use futures::stream::StreamExt;
 use tokio::sync::mpsc::Sender;
 use async_trait::async_trait;
-use decide_proto::{Component,
+use decide_protocol::{Component,
                    error::{ComponentError, DecideError}
 };
 use prost::Message;
@@ -30,14 +30,14 @@ pub mod peckboard {
 pub struct PeckLeds {
     handles: MultiLineHandle,
     led_state: LedColor,
-    state_sender: Option<mpsc::Sender<Any>>,
+    state_sender: mpsc::Sender<Any>,
 }
 
 pub struct PeckKeys {
     peck_left: Arc<AtomicBool>,
     peck_center: Arc<AtomicBool>,
     peck_right: Arc<AtomicBool>,
-    state_sender: Option<mpsc::Sender<Any>>,
+    state_sender: mpsc::Sender<Any>,
 }
 
 #[async_trait]
@@ -48,7 +48,7 @@ impl Component for PeckLeds {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/led_state";
     const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_params";
 
-    fn new(config: Self::Config) -> Self {
+    fn new(config: Self::Config, sender: Sender<Any>) -> Self {
         let mut chip4 = Chip::new(config.peckboard_chip.clone())
             .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.peckboard_chip.clone()}).unwrap();
         let handles = chip4.get_lines(&config.led_offsets.clone())
@@ -58,15 +58,15 @@ impl Component for PeckLeds {
         PeckLeds {
             handles,
             led_state: LedColor::Off,
-            state_sender: None,
+            state_sender: sender,
         }
     }
 
-    async fn init(&mut self, _config: Self::Config, sender: Sender<Any>) {
-        self.state_sender = Some(sender.clone());
+    async fn init(&mut self, _config: Self::Config) {
+        tracing::trace!("Peckboard init is empty")
     }
 
-    fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
+    fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         match state.led_state.as_str() {
             "off" => {self.led_state = LedColor::Off}
             "red" => {self.led_state = LedColor::Red}
@@ -78,7 +78,7 @@ impl Component for PeckLeds {
         let lines_value = self.led_state.as_value();
         self.handles.set_values(&lines_value)
             .map_err(|e:GpioError| ComponentError::LinesSetError {source:e}).unwrap();
-        let sender = self.state_sender.as_mut().cloned().unwrap();
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             sender
                 .send(Any {
@@ -93,7 +93,7 @@ impl Component for PeckLeds {
         Ok(())
     }
 
-    fn set_parameters(&mut self, _params: Self::Params) -> decide_proto::Result<()> {
+    fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
         todo!()
     }
 
@@ -122,17 +122,17 @@ impl Component for PeckKeys {
     const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
     const PARAMS_TYPE_URL: &'static str = "";
 
-    fn new(_config: Self::Config) -> Self {
+    fn new(_config: Self::Config, sender: Sender<Any>) -> Self {
         PeckKeys {
             peck_left: Arc::new(AtomicBool::new(false)),
             peck_center:  Arc::new(AtomicBool::new(false)),
             peck_right:  Arc::new(AtomicBool::new(false)),
-            state_sender: None,
+            state_sender: sender,
         }
     }
 
-    async fn init(&mut self, config: Self::Config, sender: Sender<Any>) {
-        self.state_sender = Some(sender.clone());
+    async fn init(&mut self, config: Self::Config) {
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             let mut chip2 = Chip::new(&config.interrupt_chip)
                 .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.interrupt_chip.clone()}).unwrap();
@@ -183,12 +183,12 @@ impl Component for PeckKeys {
         });
     }
 
-    fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
+    fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         self.peck_left.store(state.peck_left, Ordering::Release);
         self.peck_center.store(state.peck_right, Ordering::Release);
         self.peck_right.store(state.peck_center, Ordering::Release);
 
-        let sender = self.state_sender.as_mut().cloned().unwrap();
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             sender
                 .send(Any {
@@ -203,7 +203,7 @@ impl Component for PeckKeys {
         Ok(())
     }
 
-    fn set_parameters(&mut self, _params: Self::Params) -> decide_proto::Result<()> {
+    fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
         todo!()
     }
 

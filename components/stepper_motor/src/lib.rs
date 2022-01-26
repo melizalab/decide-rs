@@ -21,7 +21,7 @@ use tokio::{self,
                    Duration}
 };
 
-use decide_proto::{Component, error::{ComponentError as Error, DecideError}};
+use decide_protocol::{Component, error::{ComponentError as Error, DecideError}};
 
 //use log::{info, trace, warn};
 
@@ -35,7 +35,7 @@ pub struct StepperMotor {
     on: Arc<AtomicBool>,
     direction: Arc<AtomicBool>,
     timeout: Arc<Mutex<u64>>,
-    state_sender: Option<mpsc::Sender<Any>>,
+    state_sender: mpsc::Sender<Any>,
 }
 
 impl StepperMotor {
@@ -51,7 +51,7 @@ impl StepperMotor {
         (LinesVal([1, 0]), LinesVal([1, 0])),
         (LinesVal([0, 0]), LinesVal([1, 0]))
     ];
-    fn run_motor(mut step: usize, mut handle1: &MultiLineHandle, mut handle3: &MultiLineHandle, direction: bool) -> usize{
+    fn run_motor(mut step: usize, handle1: &MultiLineHandle, handle3: &MultiLineHandle, direction: bool) -> usize{
         if direction {
             step = (step + 1) % Self::NUM_HALF_STEPS;
             let step_1_values = &Self::HALF_STEPS[step].0;
@@ -75,7 +75,7 @@ impl StepperMotor {
         }
         step
     }
-    fn pause_motor(mut handle1: &MultiLineHandle, mut handle3: &MultiLineHandle) {
+    fn pause_motor(handle1: &MultiLineHandle, handle3: &MultiLineHandle) {
         let step_1_values = &Self::ALL_OFF;
         let step_3_values = &Self::ALL_OFF;
         handle1.set_values(&step_1_values.0)
@@ -95,18 +95,17 @@ impl Component for StepperMotor {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/stepper_motor_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/stepper_motor_params";
 
-    fn new(_config: Self::Config) -> Self {
+    fn new(_config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
         StepperMotor {
             switch: Arc::new(AtomicBool::new(true)),
             on: Arc::new(AtomicBool::new(false)),
             direction: Arc::new(AtomicBool::new(false)),
             timeout: Arc::new(Mutex::new(0)),
-            state_sender: None,
+            state_sender,
         }
     }
 
-    async fn init(&mut self, config: Self::Config, state_sender: mpsc::Sender<Any>) {
-        self.state_sender = Some(state_sender.clone());
+    async fn init(&mut self, config: Self::Config ) {
         let mut chip1 = Chip::new(config.chip1.clone())
             .map_err( |e:GpioError| Error::ChipError { source: e, chip: config.chip1.clone()}).unwrap();
         let mut chip3 = Chip::new(config.chip3.clone())
@@ -131,7 +130,7 @@ impl Component for StepperMotor {
         let switch_offsets = config.switch_offsets;
 
         //Thread handles motor running and stopping
-        let motor_thread_sender = self.state_sender.as_mut().cloned().unwrap();
+        let motor_thread_sender = self.state_sender.clone();
         let _motor_thread = thread::spawn(move || {
             let mut step: usize = 0;
             StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
@@ -176,7 +175,9 @@ impl Component for StepperMotor {
         let switch = self.switch.clone();
         let on = self.on.clone();
         let direction = self.direction.clone();
-        let switch_thread = tokio::spawn( async move {
+        let switch_sender = self.state_sender.clone();
+
+        let _switch_thread = tokio::spawn( async move {
             //init switch lines
             let line_14 = chip1.get_line(switch_offsets[0])
                 .map_err(|e:GpioError| Error::LineGetError {source:e, line: 14}).unwrap();
@@ -241,17 +242,17 @@ impl Component for StepperMotor {
                     value: state.encode_to_vec(),
                     type_url: Self::STATE_TYPE_URL.into(),
                 };
-                state_sender.send(message).await.unwrap();
+                switch_sender.send(message).await.unwrap();
             }
         });
     }
 
-    fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
+    fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         self.switch.store(state.switch, Ordering::Release);
         self.on.store(state.on, Ordering::Release);
         self.direction.store(state.direction, Ordering::Release);
 
-        let sender = self.state_sender.as_mut().cloned().unwrap();
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             sender
                 .send(Any {
@@ -266,7 +267,7 @@ impl Component for StepperMotor {
         Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
+    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
         *self.timeout.lock().unwrap() = params.timeout;
         Ok(())
     }

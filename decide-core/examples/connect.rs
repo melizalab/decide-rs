@@ -1,4 +1,4 @@
-use decide_proto::{decide::Reply, GeneralRequest, Request, RequestType, REQ_ENDPOINT};
+use decide_protocol::{proto::Reply, GeneralRequest, Request, RequestType, REQ_ENDPOINT};
 use tmq::{request, Context, Multipart};
 
 pub fn msg(bytes: &[u8]) -> zmq::Message {

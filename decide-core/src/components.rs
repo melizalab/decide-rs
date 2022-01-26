@@ -3,6 +3,7 @@ use house_light::HouseLight;
 use peckboard::{PeckKeys, PeckLeds};
 use stepper_motor::StepperMotor;
 use sound::AudioPlayer;
+use sound_alsa::AlsaPlayback;
 
 macro_rules! impl_components {
     ($($component:ident),*) => {
@@ -151,4 +152,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AudioPlayer);
+impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AudioPlayer,AlsaPlayback);

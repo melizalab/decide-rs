@@ -1,25 +1,22 @@
-use std::ops::Deref;
 use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, Ordering}, Mutex};
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
-use tmq::{Context, dealer, publish, request, subscribe};
+use tmq::{dealer, subscribe};
 use tokio::{self,
             sync::mpsc,
-            time::{//sleep,
-                   Duration}
 };
 
-use decide_proto::{Component, error::DecideError};
+use decide_protocol::{Component, error::DecideError};
 
 pub struct AudioPlayer {
     server: Arc<AtomicBool>, //'running' or 'stopped'
     playing: Arc<AtomicBool>,
     stim_path: Arc<Mutex<String>>,
     timeout: Arc<AtomicU8>,
-    state_sender: Option<mpsc::Sender<Any>>,
+    state_sender: mpsc::Sender<Any>,
 }
 pub mod sound {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
@@ -33,21 +30,21 @@ impl Component for AudioPlayer {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/sound_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/sound_params";
 
-    fn new(_config: Self::Config) -> Self {
+    fn new(_config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
         AudioPlayer {
             server: Arc::new(AtomicBool::new(false)),
             playing: Arc::new(AtomicBool::new(false)),
             stim_path: Arc::new(Mutex::new(String::from(".wav"))),
             timeout: Arc::new(AtomicU8::new(Default::default())),
-            state_sender: None,
+            state_sender,
         }
     }
 
-    async fn init(&mut self, config: Self::Config, state_sender: mpsc::Sender<Any>) {
-        self.state_sender = Some(state_sender.clone());
+    async fn init(&mut self, config: Self::Config) {
         let server = self.server.clone();
         let playing = self.playing.clone();
-        let mut stim_path = self.stim_path.clone();
+        let stim_path = self.stim_path.clone();
+        let sender = self.state_sender.clone();
 
         tokio::spawn(async move {
             let jstim_contxt = tmq::Context::new();
@@ -59,7 +56,7 @@ impl Component for AudioPlayer {
             while let Some(Ok(multprt)) = sub_soc.next().await {
                 tracing::trace!("Jstim subscription msg received");
                 let mut stim_path = stim_path.lock().unwrap().clone();
-                let mut multipart = multprt
+                let multipart = multprt
                     .iter()
                     .map(|part| part.as_str().unwrap())
                     .collect::<Vec<&str>>();
@@ -89,7 +86,7 @@ impl Component for AudioPlayer {
                         _ => {tracing::error!("Unexpected msg from jstimserver {:?}", multipart)}
                     }
                 }
-                let mut state = Self::State {
+                let state = Self::State {
                     server: server.load(Ordering::Acquire),
                     playing: playing.load(Ordering::Acquire),
                     stim_path: stim_path.clone(),
@@ -98,18 +95,18 @@ impl Component for AudioPlayer {
                     value: state.encode_to_vec(),
                     type_url: Self::STATE_TYPE_URL.into(),
                 };
-                state_sender.send(message).await.unwrap();
+                sender.send(message).await.unwrap();
             }
         });
     }
 
-    fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
+    fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         let Self::State { server, playing, stim_path} = state.clone();
         self.server.store(server, Ordering::Release);
         self.playing.store(playing, Ordering::Release);
-        let mut stim_path = self.stim_path.lock().unwrap();
-        *stim_path = state.stim_path.clone();
-        let sender = self.state_sender.as_mut().cloned().unwrap();
+        let mut path = self.stim_path.lock().unwrap();
+        *path = stim_path.clone();
+        let sender = self.state_sender.clone();
         tokio::spawn(async move {
             sender
                 .send(Any {
@@ -124,7 +121,7 @@ impl Component for AudioPlayer {
         Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
+    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
         self.timeout.store(params.timeout as u8, Ordering::Release);
         Ok(())
     }

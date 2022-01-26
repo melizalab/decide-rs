@@ -15,8 +15,9 @@ use tokio::{self,
             sync::mpsc::{self, Sender},
             time::{Duration, sleep}
 };
-use decide_proto::{Component, error::{ComponentError::FileAccessError, DecideError}
+use decide_protocol::{Component, error::{ComponentError::FileAccessError, DecideError}
 };
+
 pub mod house_light {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
@@ -26,7 +27,7 @@ pub struct HouseLight {
     fake_clock: Arc<AtomicBool>,
     brightness: Arc<AtomicU8>,
     interval: Arc<AtomicU32>,
-    state_sender: Option<mpsc::Sender<Any>>,
+    state_sender: mpsc::Sender<Any>,
 }
 
 #[async_trait]
@@ -37,22 +38,22 @@ impl Component for HouseLight {
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
 
-    fn new(_config: Self::Config) -> Self {
+    fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
         HouseLight {
             switch: Arc::new(AtomicBool::new(false)),
             fake_clock: Arc::new(AtomicBool::new(false)),
             brightness: Arc::new(AtomicU8::new(0)),
             interval: Arc::new(AtomicU32::new(300)),
-            state_sender: None,
+            state_sender,
         }
     }
 
-    async fn init(&mut self, config: Self::Config, state_sender: Sender<Any>) {
-        self.state_sender = Some(state_sender.clone());
+    async fn init(&mut self, config: Self::Config) {
         let switch = self.switch.clone();
         let fake_clock = self.fake_clock.clone();
         let brightness = self.brightness.clone();
         let interval = self.interval.clone();
+        let sender = self.state_sender.clone();
 
         tokio::spawn(async move {
             let dev_path = config.device_path;
@@ -84,15 +85,15 @@ impl Component for HouseLight {
                         value: state.encode_to_vec(),
                         type_url: Self::STATE_TYPE_URL.into(),
                     };
-                    state_sender.send(message).await.unwrap();
+                    sender.send(message).await.unwrap();
                 }
                 sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
             }
         });
     }
 
-    fn change_state(&mut self, state: Self::State) -> decide_proto::Result<()> {
-        let sender = self.state_sender.as_mut().cloned().unwrap();
+    fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
+        let sender = self.state_sender.clone();
 
         self.switch.store(state.switch, Ordering::Relaxed);
         self.fake_clock.store(state.fake_clock, Ordering::Relaxed);
@@ -113,7 +114,7 @@ impl Component for HouseLight {
         Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_proto::Result<()> {
+    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
         self.interval.store(params.clock_interval as u32, Ordering::Relaxed);
         Ok(())
     }
