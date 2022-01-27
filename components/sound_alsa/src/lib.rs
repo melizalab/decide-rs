@@ -20,9 +20,9 @@ use decide_protocol::{Component,
                       error::{ComponentError, DecideError}
 };
 use futures::executor::block_on;
-use sound_alsa::state::PlayBack;
+use proto::state::PlayBack;
 
-pub mod sound_alsa {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 #[derive(Deserialize)]
@@ -43,8 +43,8 @@ pub struct AlsaPlayback {
 
 #[async_trait]
 impl Component for AlsaPlayback {
-    type State = sound_alsa::State;
-    type Params = sound_alsa::Params;
+    type State = proto::State;
+    type Params = proto::Params;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "";
     const PARAMS_TYPE_URL: &'static str = "";

@@ -25,7 +25,7 @@ use decide_protocol::{Component, error::{ComponentError as Error, DecideError}};
 
 //use log::{info, trace, warn};
 
-pub mod stepper_motor {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
@@ -89,8 +89,8 @@ impl StepperMotor {
 
 #[async_trait]
 impl Component for StepperMotor {
-    type State = stepper_motor::State;
-    type Params = stepper_motor::Params;
+    type State = proto::State;
+    type Params = proto::Params;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/stepper_motor_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/stepper_motor_params";

@@ -18,7 +18,7 @@ use tokio::{self,
 use decide_protocol::{Component, error::{ComponentError::FileAccessError, DecideError}
 };
 
-pub mod house_light {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
@@ -32,8 +32,8 @@ pub struct HouseLight {
 
 #[async_trait]
 impl Component for HouseLight {
-    type State = house_light::State;
-    type Params = house_light::Params;
+    type State = proto::State;
+    type Params = proto::Params;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
     const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";

@@ -152,4 +152,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AudioPlayer,AlsaPlayback);
+impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback);

@@ -23,7 +23,7 @@ use tokio::{
     self, sync::mpsc,
 };
 
-pub mod peckboard {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
@@ -42,8 +42,8 @@ pub struct PeckKeys {
 
 #[async_trait]
 impl Component for PeckLeds {
-    type State = peckboard::LedState;
-    type Params = peckboard::LedParams;
+    type State = proto::LedState;
+    type Params = proto::LedParams;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/led_state";
     const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_params";
@@ -116,8 +116,8 @@ impl Component for PeckLeds {
 
 #[async_trait]
 impl Component for PeckKeys {
-    type State = peckboard::KeyState;
-    type Params = peckboard::KeyParams;
+    type State = proto::KeyState;
+    type Params = proto::KeyParams;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
     const PARAMS_TYPE_URL: &'static str = "";
