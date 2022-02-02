@@ -14,7 +14,7 @@ peckboard = { path = "../components/peckboard" }
 sound_alsa = { path = "../components/sound_alsa" }
 stepper_motor = { path = "../components/stepper_motor" }
 sound = { path = "../components/sound" }
-tmq = "0.3.0"
+tmq = { version = "0.3", features = ["zmq-vendored"] }
 zmq = "0.9.2"
 log = "0.4.14"
 tokio = { version = "1.13", features = ["full"] }
