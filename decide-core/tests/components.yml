@@ -1,4 +1,49 @@
-house-lights:
+lights:
   driver: Lights
   config:
     pin: 4
+house-light:
+  driver: HouseLight
+  config:
+    device_path: /sys/class/leds/starboard::lights/brightness
+    fake_dawn: 7
+    fake_dusk: 19
+    max_brightness: 255
+stepper-motor:
+  driver: StepperMotor
+  config:
+    chip1: /dev/gpiochip1
+    chip3: /dev/gpiochip3
+    switch_offsets: [14,15]
+    motor1_offsets: [13,12]
+    motor3_offsets: [19,21]
+    dt: 2000
+peck-leds-left:
+  driver: PeckLeds
+  config:
+    peckboard_chip: /dev/gpiochip4
+    led_offsets: [0,3,6]
+peck-leds-center:
+  driver: PeckLeds
+  config:
+    peckboard_chip: /dev/gpiochip4
+    led_offsets: [1,4,7]
+peck-leds-right:
+  driver: PeckLeds
+  config:
+    peckboard_chip: /dev/gpiochip4
+    led_offsets: [2,5,8]
+peck-keys:
+  driver: PeckKeys
+  config:
+    interrupt_chip: /dev/gpiochip2
+    interrupt_offset: 24
+    peckboard_chip: /dev/gpiochip4
+    key_offsets: [13,14,15]
+    ir_offsets: [9,10,11]
+audio-playback:
+  driver: AlsaPlayback
+  config:
+    audio_device: hw:1
+    sample_rate: 44100
+    channel: 2
