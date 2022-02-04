@@ -44,7 +44,7 @@ pub struct PeckKeys {
 impl Component for PeckLeds {
     type State = proto::LedState;
     type Params = proto::LedParams;
-    type Config = Config;
+    type Config = LedConfig;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/led_state";
     const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_params";
 
@@ -63,7 +63,7 @@ impl Component for PeckLeds {
     }
 
     async fn init(&mut self, _config: Self::Config) {
-        tracing::trace!("Peckboard init is empty")
+        tracing::info!("PeckLed init is empty")
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -118,7 +118,7 @@ impl Component for PeckLeds {
 impl Component for PeckKeys {
     type State = proto::KeyState;
     type Params = proto::KeyParams;
-    type Config = Config;
+    type Config = KeyConfig;
     const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
     const PARAMS_TYPE_URL: &'static str = "";
 
@@ -222,13 +222,17 @@ impl Component for PeckKeys {
 }
 
 #[derive(Deserialize)]
-pub struct Config {
+pub struct LedConfig {
+    peckboard_chip: String,
+    led_offsets: Vec<u32>,
+}
+#[derive(Deserialize)]
+pub struct KeyConfig {
     interrupt_chip: String,
     interrupt_offset: u32,
     peckboard_chip: String,
-    led_offsets: Vec<u32>,
-    ir_offsets: Vec<u32>,
     key_offsets: Vec<u32>,
+    ir_offsets: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug)]

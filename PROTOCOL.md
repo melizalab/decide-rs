@@ -114,7 +114,7 @@ Unlock the controller. The request body should be empty.
 
 #### Shutdown (0x22)
 
-Shutdown the controller. The request body should be empty. The controller will shutdown immediately
+Shutdown the controller. The request body should be empty. The controller will shut down immediately
 without replying.
 
 ### REP messages

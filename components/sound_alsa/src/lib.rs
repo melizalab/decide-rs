@@ -20,6 +20,7 @@ use decide_protocol::{Component,
                       error::{ComponentError, DecideError}
 };
 use futures::executor::block_on;
+use tracing::info;
 use proto::state::PlayBack;
 
 pub mod proto {
@@ -29,7 +30,6 @@ pub mod proto {
 pub struct Config {
     audio_device: String,
     sample_rate: u32,
-    //buffer_size: u32,
     channel: u32,
 }
 pub struct AlsaPlayback {
@@ -91,19 +91,29 @@ impl Component for AlsaPlayback {
 
             let mut queue: HashMap<OsString, Vec<i16>> = std::collections::HashMap::new();
             let dir = dir.lock().unwrap().clone();
-            for result in read_dir(Path::new(&dir)).unwrap() {
-                let entry = result.unwrap();
-                let path = entry.path();
-                let file = entry.file_name();
-                if path.extension().unwrap() == "wav" {
-                    let wav = audrey::open(path).unwrap();
-                    let wav_channels = wav.description().channel_count() ;
-                    let hw_channels = config.channel.clone();
-                    let audio = process_audio(wav, wav_channels, hw_channels);
-                    queue.insert(file, audio);
-                }
+            'import: loop {
+                let mut reader = read_dir(Path::new(&dir)).unwrap();
+                let mut entry= reader.next();
+                if entry.is_some() {
+                    while entry.is_some() {
+                        let file = entry.unwrap().unwrap();
+                        let path = file.path();
+                        let fname = file.file_name();
+                        if path.extension().unwrap() == "wav" {
+                            let wav = audrey::open(path).unwrap();
+                            let wav_channels = wav.description().channel_count();
+                            let hw_channels = config.channel.clone();
+                            let audio = process_audio(wav, wav_channels, hw_channels);
+                            queue.insert(fname,audio);
+                        }
+                        entry = reader.next();
+                    }
+                    info!("Finished import, found {:?} wav files", queue.len());
+                    break 'import
+                } else {info!("Playback directory is empty. Awaiting files at {:?}", dir)}
             }
-            tracing::trace!("imported audio files");
+
+            info!("Begin Playback loop");
             //Todo: send init
             'stim: loop {
                 let stim = audio_id.lock().unwrap();
@@ -153,8 +163,10 @@ impl Component for AlsaPlayback {
                                 PlayBack::Playing => {continue 'playback}
                             };
                         }
-                    }
-                } else {thread::sleep(Duration::from_millis(10)); continue}
+                    } else {
+                        tracing::error!("Playback set to Playing but filename is invalid");
+                        thread::sleep(Duration::from_millis(1000)); continue 'stim}
+                } else {thread::sleep(Duration::from_millis(1000)); continue}
             }
         });
 

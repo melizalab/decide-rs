@@ -2,7 +2,7 @@ use lights::Lights;
 use house_light::HouseLight;
 use peckboard::{PeckKeys, PeckLeds};
 use stepper_motor::StepperMotor;
-use sound::AudioPlayer;
+//use sound::AudioPlayer;
 use sound_alsa::AlsaPlayback;
 
 macro_rules! impl_components {
