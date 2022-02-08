@@ -13,8 +13,7 @@ use audrey::read::BufFileReader;
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
-use tokio::{self, sync::mpsc};
-use tokio::sync::mpsc::Sender;
+use tokio::{self, sync::mpsc::{self, Sender}};
 
 use decide_protocol::{Component,
                       error::{ComponentError, DecideError}
@@ -52,7 +51,7 @@ impl Component for AlsaPlayback {
     fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
         AlsaPlayback{
             //mode: Arc::new(Mutex::new("".to_string())),
-            dir: Arc::new(Mutex::new("".to_string())),
+            dir: Arc::new(Mutex::new("./stims".to_string())),
             audio_id: Arc::new(Mutex::new(String::from("None"))),
             playback: Arc::new(Mutex::new(PlayBack::Stop)),
             elapsed: Arc::new(Mutex::new(Some(prost_types::Duration{
@@ -68,7 +67,38 @@ impl Component for AlsaPlayback {
         let playback = self.playback.clone();
         let elapsed = self.elapsed.clone();
         let sender = self.state_sender.clone();
-
+        let queue: Arc<Mutex<HashMap<OsString, Vec<i16>>>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let queue1 = queue.clone();
+        thread::spawn(move|| {
+            let mut old_dir = dir.lock().unwrap().clone();
+            loop {
+                let mut stim_queue = queue1.lock().unwrap();
+                let new_dir = dir.lock().unwrap().clone();
+                if new_dir != old_dir {
+                    old_dir = new_dir;
+                    let mut reader = read_dir(Path::new(&old_dir)).unwrap();
+                    let mut entry= reader.next();
+                    if entry.is_some() {
+                        while entry.is_some() {
+                            let file = entry.unwrap().unwrap();
+                            let path = file.path();
+                            let fname = file.file_name();
+                            if !stim_queue.contains_key(&fname) {
+                                if path.extension().unwrap() == "wav" {
+                                    let wav = audrey::open(path).unwrap();
+                                    let wav_channels = wav.description().channel_count();
+                                    let hw_channels = config.channel.clone();
+                                    let audio = process_audio(wav, wav_channels, hw_channels);
+                                    stim_queue.insert(fname,audio);
+                                }
+                            }
+                            entry = reader.next();
+                        }
+                    }
+                } else {thread::sleep(Duration::from_secs(60))}
+            }
+        });
+        let queue2 = queue.clone();
         thread::spawn(move|| {
             let pcm = PCM::new(&*config.audio_device, Direction::Playback, false)
                 .map_err(|_e| ComponentError::PcmInitErr {  dev_name: config.audio_device.clone() }).unwrap();
@@ -83,47 +113,26 @@ impl Component for AlsaPlayback {
                 .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("access")}).unwrap();
             hwp.set_format(Format::s16())
                 .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("format")}).unwrap();
+            pcm.hw_params(&hwp).unwrap();
 
             let swp = pcm.sw_params_current().unwrap();
             swp.set_start_threshold(hwp.get_buffer_size().unwrap()).unwrap();
             pcm.sw_params(&swp).unwrap();
-            let io = pcm.io_i16().unwrap();
+            let io = pcm.io_i16()
+                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("io_i16")})
+                .unwrap();
 
-            let mut queue: HashMap<OsString, Vec<i16>> = std::collections::HashMap::new();
-            let dir = dir.lock().unwrap().clone();
-            'import: loop {
-                let mut reader = read_dir(Path::new(&dir)).unwrap();
-                let mut entry= reader.next();
-                if entry.is_some() {
-                    while entry.is_some() {
-                        let file = entry.unwrap().unwrap();
-                        let path = file.path();
-                        let fname = file.file_name();
-                        if path.extension().unwrap() == "wav" {
-                            let wav = audrey::open(path).unwrap();
-                            let wav_channels = wav.description().channel_count();
-                            let hw_channels = config.channel.clone();
-                            let audio = process_audio(wav, wav_channels, hw_channels);
-                            queue.insert(fname,audio);
-                        }
-                        entry = reader.next();
-                    }
-                    info!("Finished import, found {:?} wav files", queue.len());
-                    break 'import
-                } else {info!("Playback directory is empty. Awaiting files at {:?}", dir)}
-            }
-
-            info!("Begin Playback loop");
-            //Todo: send init
             'stim: loop {
                 let stim = audio_id.lock().unwrap();
                 let p = playback.lock().unwrap().clone();
                 if p == PlayBack::Playing {
                     if stim.ends_with("wav")  {
-                        let stim = OsString::from(stim.clone());
+                        let stim_queue = queue2.lock().unwrap().clone();
+                        let stim_name = OsString::from(stim.clone());
                         let mut elapsed = elapsed.lock().unwrap();
                         pcm.hw_params(&hwp).unwrap();
-                        io.writei(&*queue[&stim]).unwrap();
+                        let data = stim_queue.get(&*stim_name).unwrap();
+                        io.writei(data).unwrap();
                         let timer = std::time::Instant::now();
                         'playback: while pcm.state() == State::Running {
                             let p = playback.try_lock().unwrap().clone();

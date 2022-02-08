@@ -53,7 +53,7 @@ impl Component for PeckLeds {
             .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.peckboard_chip.clone()}).unwrap();
         let handles = chip4.get_lines(&config.led_offsets.clone())
             .map_err(|e:GpioError| ComponentError::LinesGetError {source:e, lines: config.led_offsets.clone()}).unwrap()
-            .request(LineRequestFlags::OUTPUT, &[], "PeckLeds")
+            .request(LineRequestFlags::OUTPUT, &[0,0,0], "PeckLeds")
             .map_err(|e:GpioError| ComponentError::LinesReqError {source:e, lines: config.led_offsets.clone()}).unwrap();
         PeckLeds {
             handles,
