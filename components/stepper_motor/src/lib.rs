@@ -138,7 +138,7 @@ impl Component for StepperMotor {
                 //determine if motor is on due to starboard switches or not
                 if switch.load(Ordering::Acquire) {
                     match on.load(Ordering::Acquire) {
-                        true => {step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
+                        true => {tracing::trace!("Switch push detected, running motor");step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
                                                          direction.load(Ordering::Acquire))}
                         false => {StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle)}
                     }
@@ -147,7 +147,7 @@ impl Component for StepperMotor {
                     // while the timeout period has not completely elapsed:
                     while Instant::now().duration_since(timer) < Duration::from_millis(*timeout.lock().unwrap()) {
                         match on.load(Ordering::Acquire) {
-                            true => {step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
+                            true => {tracing::trace!("Switch push detected, running motor");step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
                                                              direction.load(Ordering::Acquire))}
                             false => {StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle)}
                         };
