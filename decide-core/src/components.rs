@@ -33,23 +33,27 @@ macro_rules! impl_components {
                 use prost_types::Any;
                 use prost::Message;
 
+                /// non-dummy components
+                mod real {
+                    $(
+                    pub type $component = super::super::super::$component;
+                    )*
+                }
                 $(
-                    type RealComponent = super::super::$component;
-
                     pub struct $component {
-                        state: <RealComponent as Component>::State,
-                        params: <RealComponent as Component>::Params,
-                        _config: <RealComponent as Component>::Config,
+                        state: <real::$component as Component>::State,
+                        params: <real::$component as Component>::Params,
+                        _config: <real::$component as Component>::Config,
                         state_sender: mpsc::Sender<Any>,
                     }
 
                     #[async_trait]
                     impl Component for $component {
-                        type State = <RealComponent as Component>::State;
-                        type Params = <RealComponent as Component>::Params;
-                        type Config = <RealComponent as Component>::Config;
-                        const STATE_TYPE_URL: &'static str = <RealComponent as Component>::STATE_TYPE_URL;
-                        const PARAMS_TYPE_URL: &'static str = <RealComponent as Component>::PARAMS_TYPE_URL;
+                        type State = <real::$component as Component>::State;
+                        type Params = <real::$component as Component>::Params;
+                        type Config = <real::$component as Component>::Config;
+                        const STATE_TYPE_URL: &'static str = <real::$component as Component>::STATE_TYPE_URL;
+                        const PARAMS_TYPE_URL: &'static str = <real::$component as Component>::PARAMS_TYPE_URL;
 
                         fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
                             let state = Self::State::default();
