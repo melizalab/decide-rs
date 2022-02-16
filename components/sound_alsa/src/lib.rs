@@ -19,7 +19,6 @@ use decide_protocol::{Component,
                       error::{ComponentError, DecideError}
 };
 use futures::executor::block_on;
-use tracing::info;
 use proto::state::PlayBack;
 
 pub mod proto {
@@ -199,7 +198,7 @@ impl Component for AlsaPlayback {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("state changed");
+            tracing::trace!("Sound_Alsa state changed");
         });
         Ok(())
     }

@@ -40,7 +40,7 @@ impl Component for HouseLight {
 
     fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
         HouseLight {
-            switch: Arc::new(AtomicBool::new(false)),
+            switch: Arc::new(AtomicBool::new(true)),
             fake_clock: Arc::new(AtomicBool::new(false)),
             brightness: Arc::new(AtomicU8::new(0)),
             interval: Arc::new(AtomicU32::new(300)),
@@ -49,31 +49,32 @@ impl Component for HouseLight {
     }
 
     async fn init(&mut self, config: Self::Config) {
+        let dev_path = config.device_path;
+        let mut device = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .open(Path::new(&dev_path))
+            .map_err(|e| FileAccessError {source:e, dir: dev_path.clone()})
+            .unwrap();
+        let dawn = config.fake_dawn;
+        let dusk = config.fake_dusk;
+        let max_brightness = config.max_brightness;
+
         let switch = self.switch.clone();
         let fake_clock = self.fake_clock.clone();
         let brightness = self.brightness.clone();
         let interval = self.interval.clone();
         let sender = self.state_sender.clone();
 
-        tokio::spawn(async move {
-            let dev_path = config.device_path;
-            let mut device = OpenOptions::new()
-                .write(true)
-                .read(true)
-                .open(Path::new(&dev_path))
-                .map_err(|e| FileAccessError {source:e, dir: dev_path.clone()})
-                .unwrap();
-            let dawn = config.fake_dawn;
-            let dusk = config.fake_dusk;
-            let max_brightness = config.max_brightness;
-            loop {
+        tokio::spawn(async move{
+            loop{
                 if switch.load(Ordering::Relaxed) {
                     let fake_clock = fake_clock.load(Ordering::Relaxed);
                     let altitude = HouseLight::calc_altitude(fake_clock, dawn, dusk);
                     let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
                     device.write(&[new_brightness]).unwrap();
-                    tracing::trace!("Brightness written to sysfs file");
+                    tracing::info!("Brightness written to sysfs file");
                     brightness.store(new_brightness, Ordering::Relaxed);
 
                     let state = Self::State {
@@ -86,8 +87,8 @@ impl Component for HouseLight {
                         type_url: Self::STATE_TYPE_URL.into(),
                     };
                     sender.send(message).await.unwrap();
+                    sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
                 }
-                sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
             }
         });
     }
@@ -108,7 +109,7 @@ impl Component for HouseLight {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("state changed");
+            tracing::trace!("House-light state changed");
         });
 
         Ok(())

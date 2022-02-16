@@ -1,19 +1,19 @@
 syntax = "proto3";
 
-message Led_State {
+message LedState {
   string led_state = 1;
 }
 
-message Led_Params {
+message LedParams {
 
 }
 
-message Key_State {
+message KeyState {
   bool peck_left = 1;
   bool peck_center = 2;
   bool peck_right = 3;
 }
 
-message Key_Params {
+message KeyParams {
 
 }

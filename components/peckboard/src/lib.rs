@@ -88,13 +88,13 @@ impl Component for PeckLeds {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("state changed");
+            tracing::trace!("PeckLeds state changed");
         });
         Ok(())
     }
 
     fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
-        todo!()
+        Ok(())
     }
 
     fn get_state(&self) -> Self::State {
@@ -119,8 +119,8 @@ impl Component for PeckKeys {
     type State = proto::KeyState;
     type Params = proto::KeyParams;
     type Config = KeyConfig;
-    const STATE_TYPE_URL: &'static str = ""; //TODO: Add peckboard links
-    const PARAMS_TYPE_URL: &'static str = "";
+    const STATE_TYPE_URL: &'static str = "melizalab.org/proto/key_state";
+    const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/key_params";
 
     fn new(_config: Self::Config, sender: Sender<Any>) -> Self {
         PeckKeys {
@@ -198,7 +198,7 @@ impl Component for PeckKeys {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("state changed");
+            tracing::trace!("PeckKeys state changed");
         });
         Ok(())
     }

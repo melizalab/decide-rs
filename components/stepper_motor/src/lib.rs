@@ -262,7 +262,7 @@ impl Component for StepperMotor {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("state changed");
+            tracing::trace!("Stepper-motor state changed");
         });
         Ok(())
     }
