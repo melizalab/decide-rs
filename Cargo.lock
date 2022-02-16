@@ -112,7 +112,6 @@ dependencies = [
  "async-trait",
  "decide-protocol",
  "directories",
- "env_logger",
  "futures",
  "lights",
  "log",
@@ -124,7 +123,6 @@ dependencies = [
  "serde-value",
  "serde_yaml",
  "sha3",
- "test-log",
  "tmq",
  "tokio",
  "tokio-stream",
@@ -426,14 +424,20 @@ checksum = "dd8f7255a17a627354f321ef0055d63b898c6fb27eff628af4d1b66b7331edf6"
 name = "lights"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "decide-protocol",
+ "env_logger",
+ "futures",
  "prost",
  "prost-build",
  "prost-types",
  "serde",
+ "test-log",
+ "tmq",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

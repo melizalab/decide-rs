@@ -14,10 +14,10 @@ Since this workspace only contains a single binary crate, `decide-core`, you can
 
 ## running tests
 
-The tests in `decide-core` require a running instance of `decide`, otherwise they will hang. Follow these steps to run tests:
+The tests require a running instance of `decide`, otherwise they will hang.
 ```bash
 mkdir -p ~/.config/decide/
-ln -s decide-core/tests/components.yml ~/.config/decide/
+ln -s components/lights/tests/components.yml ~/.config/decide/
 cargo run &
 cargo test
 kill $(jobs -l -p)
