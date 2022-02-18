@@ -1,0 +1,28 @@
+[package]
+name = "lights"
+version = "0.1.0"
+authors = ["Jonah Weissman <jonahrweissman@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+decide-protocol = { path = "../../decide-protocol" }
+prost = "0.9"
+tokio = { version = "1.12", features = ["full"] }
+prost-types = "0.9"
+async-trait = "0.1.51"
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1.29"
+tmq = "0.3.0"
+anyhow = "1.0"
+futures = "0.3.17"
+
+[dev-dependencies]
+test-log = { version = "0.2.8", default-features = false, features = ["trace"] }
+env_logger = "*"
+tracing = {version = "0.1", default-features = false}
+tracing-subscriber = {version = "0.3", default-features = false, features = ["env-filter", "fmt"]}
+
+[build-dependencies]
+prost-build = "0.9"

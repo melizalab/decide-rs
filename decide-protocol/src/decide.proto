@@ -1,0 +1,62 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+package decide;
+
+service DecideControl {
+  // request change to state of a component
+  rpc ChangeState(StateChange) returns (Reply);
+  // request reset to default state
+  rpc ResetState(google.protobuf.Empty) returns (Reply);
+  // request lock on experiment
+  rpc RequestLock(Config) returns (Reply);
+  // request unlock of experiment
+  rpc ReleaseLock(google.protobuf.Empty) returns (Reply);
+  // request update to parameter values
+  rpc SetParameters(ComponentParams) returns (Reply);
+  // request parameter values for component
+  rpc GetParameters(google.protobuf.Empty) returns (Reply);
+}
+
+/* The payload for a requested state change to a component. Components must
+   define a protobuf message type for their state */
+message StateChange {
+  google.protobuf.Any state = 1;
+}
+
+/* The payload for a requested change to the parameters for a component.
+   Components must define a protobuf message type for their parameters */
+message ComponentParams {
+  google.protobuf.Any parameters = 1;
+}
+
+message Config {
+  string identifier = 1;
+}
+
+/* These are the reply types */
+message Reply {
+  oneof result {
+    // For state_change, state_reset, lock_expt, unlock_expt:
+    // indicates the request was correctly formed and was acted on
+    google.protobuf.Empty ok = 2;
+    // indicates an error with the request, contents give the cause
+    string error = 3;
+    // reply to get_parameters
+    google.protobuf.Any params = 19;
+  }
+}
+
+/* In ZMQ, the first frame of a PUB message is the topic. In this protocol, the
+ * topic is used to specify the message type, allowing receivers to filter what
+ * they want to see. There are three main topics: `state` for state changes,
+ * `error` for fatal error messages, and `log` for informative log messages. The
+ * same protobuf type is used for all three. For error and log messages, the
+ * human-readable explanation is stored in the `label` field.
+ */
+message Pub {
+  google.protobuf.Timestamp time = 1;
+  google.protobuf.Any state = 2;
+}

@@ -1,15 +1,7 @@
-[package]
-name = "decide-rs"
-version = "0.1.0"
-authors = ["Jonah Weissman <jonahrweissman@gmail.com>"]
-edition = "2018"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-bytes = "0.4"
-prost = "0.5"
-prost-types = "0.8"
-
-[build-dependencies]
-prost-build = "0.5"
+members = [
+    "decide-protocol",
+    "decide-core",
+    "components/lights",
+]
