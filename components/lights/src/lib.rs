@@ -10,6 +10,7 @@ use std::sync::{
 use tokio::{
     self,
     sync::mpsc,
+    task::JoinHandle,
     time::{sleep, Duration},
 };
 #[macro_use]
@@ -29,6 +30,7 @@ pub struct Lights {
     on: Arc<AtomicBool>,
     blink: Arc<AtomicBool>,
     state_sender: mpsc::Sender<Any>,
+    task_handle: Option<JoinHandle<()>>,
 }
 
 #[async_trait]
@@ -45,6 +47,7 @@ impl Component for Lights {
             on: Arc::new(AtomicBool::new(false)),
             blink: Arc::new(AtomicBool::new(false)),
             state_sender,
+            task_handle: None,
         }
     }
 
@@ -52,7 +55,7 @@ impl Component for Lights {
         let blink = Arc::clone(&self.blink);
         let on = Arc::clone(&self.on);
         let sender = self.state_sender.clone();
-        tokio::spawn(async move {
+        self.task_handle = Some(tokio::spawn(async move {
             loop {
                 if blink.load(Ordering::Acquire) {
                     debug!("lights changing state");
@@ -67,7 +70,7 @@ impl Component for Lights {
                 }
                 sleep(Duration::from_millis(100)).await;
             }
-        });
+        }));
     }
 
     fn change_state(&mut self, state: Self::State) -> Result<(), DecideError> {
@@ -92,15 +95,22 @@ impl Component for Lights {
         Ok(())
     }
 
+    fn get_state(&self) -> Self::State {
+        Self::State {
+            on: self.on.load(Ordering::Acquire),
+        }
+    }
+
     fn get_parameters(&self) -> Self::Params {
         Self::Params {
             blink: self.blink.load(Ordering::Acquire),
         }
     }
 
-    fn get_state(&self) -> Self::State {
-        Self::State {
-            on: self.on.load(Ordering::Acquire),
+    async fn shutdown(&mut self) {
+        if let Some(task_handle) = self.task_handle.take() {
+            task_handle.abort();
+            task_handle.await.unwrap_err();
         }
     }
 }

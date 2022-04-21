@@ -14,26 +14,29 @@ All are disabled by default.
 */
 use anyhow::Context as AnyhowContext;
 use decide_protocol::{
-    error::{ClientError, ControllerError},
+    error::{ClientError, ControllerError, DecideError},
     proto, ComponentName,
     ComponentRequest::{self, *},
     GeneralRequest::{self, *},
     Request, RequestType, Result,
 };
 use directories::ProjectDirs;
-use futures::{stream, Stream, StreamExt};
+use futures::{future, stream, FutureExt, Stream, StreamExt};
 use prost::Message;
 use prost_types::Any;
 use prost_types::Timestamp;
 use serde::Deserialize;
 use serde_value::Value;
 use sha3::{Digest, Sha3_256};
-use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, time::Duration};
 use std::{fs::File, io::Read};
 use tmq::Multipart;
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::timeout,
+};
 use tokio_stream::wrappers::ReceiverStream;
 #[macro_use]
 extern crate tracing;
@@ -43,6 +46,8 @@ mod components;
 use components::ComponentKind;
 
 pub mod run;
+
+static SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 type RequestBundle = ((ComponentRequest, Vec<u8>), oneshot::Sender<proto::Reply>);
 
@@ -103,12 +108,15 @@ impl ComponentCollection {
                 let name_ = name.clone();
                 tokio::spawn(async move {
                     component.init(config).await;
-                    info!("initializing {:?}", name_);
+                    debug!("initializing {:?}", name_);
                     while let Some(((request_type, payload), reply_tx)) = request_rx.recv().await {
-                        let reply = execute(&mut component, request_type, payload);
+                        let reply = execute(&mut component, request_type, payload).await;
                         reply_tx
                             .send(reply.into())
                             .expect("controller dropped a oneshot receiver");
+                        if request_type == ComponentShutdown {
+                            break;
+                        }
                     }
                 });
                 Ok(((name.clone(), request_tx), (name, state_rx.into())))
@@ -116,7 +124,7 @@ impl ComponentCollection {
             .collect::<anyhow::Result<Vec<_>>>()?
             .into_iter()
             .unzip();
-        info!("components initialized");
+        debug!("components initialized");
         let pub_stream = build_pub_stream(state_stream);
         Ok((
             ComponentCollection {
@@ -142,12 +150,12 @@ impl ComponentCollection {
         let request = Request::try_from(request)?;
         info!("Received request {:?}", request);
         match request.request_type {
-            RequestType::General(req) => self.handle_general(req, request.body),
+            RequestType::General(req) => self.handle_general(req, request.body).await,
             RequestType::Component(req) => self.handle_component(req, request).await,
         }
     }
 
-    fn handle_general(
+    async fn handle_general(
         &mut self,
         request_type: GeneralRequest,
         payload: Vec<u8>,
@@ -157,9 +165,7 @@ impl ComponentCollection {
                 self.request_lock(proto::Config::decode(&*payload).map_err(ClientError::from)?)?
             }
             ReleaseLock => self.release_lock()?,
-            Shutdown => {
-                panic!("shutting down")
-            }
+            Shutdown => self.shutdown().await?,
         }
         .into())
     }
@@ -201,9 +207,24 @@ impl ComponentCollection {
         self.locked = false;
         Ok(proto::reply::Result::Ok(()))
     }
+
+    async fn shutdown(&mut self) -> Result<proto::reply::Result> {
+        future::join_all(self.components.iter().map(|(name, component_tx)| {
+            let (reply_tx, _reply_rx) = oneshot::channel();
+
+            let name = name.clone();
+            timeout(
+                SHUTDOWN_TIMEOUT,
+                component_tx.send(((ComponentShutdown, Vec::new()), reply_tx)),
+            )
+            .map(|r| r.map_err(|_| ControllerError::ShutdownTimeout { component: name }))
+        }))
+        .await;
+        Ok(proto::reply::Result::Ok(()))
+    }
 }
 
-fn execute(
+async fn execute(
     component: &mut ComponentKind,
     request_type: ComponentRequest,
     payload: Vec<u8>,
@@ -227,6 +248,10 @@ fn execute(
         GetParameters => {
             let params = component.get_encoded_parameters();
             proto::reply::Result::Params(params)
+        }
+        ComponentShutdown => {
+            component.shutdown().await;
+            proto::reply::Result::Ok(())
         }
     }
     .into())
