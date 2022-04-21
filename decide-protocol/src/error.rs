@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use super::ComponentName;
 use prost::DecodeError;
 use serde_value::DeserializerError;
@@ -62,7 +63,7 @@ pub enum ComponentError {
     #[error("Failed to open file")]
     FileAccessError {
         source: std::io::Error,
-        dir: String,
+        dir: PathBuf,
     },
     #[error("Failed to get chip {chip:?}")]
     ChipError {

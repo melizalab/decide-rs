@@ -49,7 +49,7 @@ impl Component for HouseLight {
     }
 
     async fn init(&mut self, config: Self::Config) {
-        let dev_path = config.device_path;
+        let dev_path = std::fs::canonicalize(config.device_path).unwrap();
         let mut device = OpenOptions::new()
             .write(true)
             .read(true)
@@ -73,7 +73,8 @@ impl Component for HouseLight {
                     let altitude = HouseLight::calc_altitude(fake_clock, dawn, dusk);
                     let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
-                    device.write(&[new_brightness]).unwrap();
+                    let write_brightness = String::from("{}", new_brightness);
+                    device.write_all(&write_brightness.as_bytes()).unwrap();
                     tracing::info!("Brightness written to sysfs file");
                     brightness.store(new_brightness, Ordering::Relaxed);
 
