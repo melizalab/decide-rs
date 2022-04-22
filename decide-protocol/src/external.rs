@@ -57,6 +57,7 @@ pub enum ComponentRequest {
     ResetState = 0x01,
     SetParameters = 0x02,
     GetParameters = 0x12,
+    ComponentShutdown = 0x13,
 }
 
 #[derive(Debug, Clone, Copy, ToPrimitive, FromPrimitive, PartialEq)]

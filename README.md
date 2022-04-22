@@ -3,9 +3,9 @@
 This workspace contains crates for the behavioral experiment framework `decide`.
 
 ## contents
-- `decide-proto`: protobuf definitions, the error type used for everything, the `Component` trait, and trait implementations for transforming between `tmq::Multipart` messages and the types used internally
+- `decide-protocol`: protobuf definitions, error types, the `Component` trait, and trait implementations for transforming between `tmq::Multipart` messages and the types used internally
 - `decide-core`: the main logic for initializing components and routing messages between clients and components
-- `components/*`: crates with a type that implements `decide_proto::Component`
+- `components/*`: crates with a type that implements `decide_protocol::Component`
 
 ## building and running
 
@@ -22,10 +22,10 @@ cross build --target armv7-unknown-linux-gnueabihf --release
 
 ## running tests
 
-The tests in `decide-core` require a running instance of `decide`, otherwise they will hang. Follow these steps to run tests:
+The tests require a running instance of `decide`, otherwise they will hang.
 ```bash
 mkdir -p ~/.config/decide/
-ln -s decide-core/tests/components.yml ~/.config/decide/
+ln -s components/lights/tests/components.yml ~/.config/decide/
 cargo run &
 cargo test
 kill $(jobs -l -p)

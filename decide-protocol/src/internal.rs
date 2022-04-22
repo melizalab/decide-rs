@@ -23,6 +23,7 @@ pub trait Component {
     fn set_parameters(&mut self, params: Self::Params) -> Result<()>;
     fn get_state(&self) -> Self::State;
     fn get_parameters(&self) -> Self::Params;
+    async fn shutdown(&mut self);
     fn deserialize_config(config: Value) -> Result<Self::Config> {
         let deserializer: ValueDeserializer<DeserializerError> = ValueDeserializer::new(config);
         let config = Self::Config::deserialize(deserializer)
