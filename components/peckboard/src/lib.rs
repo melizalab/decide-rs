@@ -212,7 +212,7 @@ impl Component for PeckKeys {
 
     fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
         tracing::error!("PeckKeys set_params should not be used. Make sure your script isn't using it without good reason");
-        //Err("Don't do it again").into() //probably invalid, fix at compile time :/
+        Ok(())
     }
 
     fn get_state(&self) -> Self::State {
@@ -225,7 +225,7 @@ impl Component for PeckKeys {
     }
 
     fn get_parameters(&self) -> Self::Params {
-        tracing::info!("PeckKeys Get_params is not implemented, nor recommended given speed of operation")
+        Self::Params {}
     }
 
     async fn shutdown(&mut self) {

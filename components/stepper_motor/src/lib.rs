@@ -35,7 +35,7 @@ pub struct StepperMotor {
     direction: Arc<AtomicBool>,
     timeout: Arc<Mutex<u64>>,
     state_sender: mpsc::Sender<Any>,
-    shutdown: Option<(std::thread::JoinHandle<()>,tokio::task::JoinHandle<()>,std_mpsc::Sender<(bool)>)>
+    shutdown: Option<(std::thread::JoinHandle<()>,tokio::task::JoinHandle<()>,std_mpsc::Sender<bool>)>
 }
 
 impl StepperMotor {
@@ -296,7 +296,7 @@ impl Component for StepperMotor {
         if let Some((motor_handle, switch_handle, sd_tx)) = self.shutdown.take() {
             switch_handle.abort();
             drop(sd_tx);
-            task_handle.await.unwrap_err();
+            switch_handle.await.unwrap_err();
             motor_handle.join().unwrap();
         }
     }

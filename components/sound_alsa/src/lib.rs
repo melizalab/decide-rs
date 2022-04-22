@@ -36,7 +36,7 @@ pub struct AlsaPlayback {
     playback: Arc<Mutex<PlayBack>>, //pause or resume
     elapsed: Arc<Mutex<Option<prost_types::Duration>>>,
     state_sender: mpsc::Sender<Any>,
-    shutdown: Option<(thread::JoinHandle<()>,std_mpsc::Sender<(bool)>)>,
+    shutdown: Option<(thread::JoinHandle<()>,std_mpsc::Sender<bool>)>,
 }
 
 #[async_trait]
@@ -212,9 +212,7 @@ impl Component for AlsaPlayback {
         Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
-        let mut dir = self.dir.lock().unwrap();
-        *dir = params.dir;
+    fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
         Ok(())
     }
 
@@ -227,16 +225,15 @@ impl Component for AlsaPlayback {
     }
 
     fn get_parameters(&self) -> Self::Params {
-        Self::Params {
-            dir : self.dir.try_lock().unwrap().clone()
-        }
+        Self::Params {}
 
     }
 
     async fn shutdown(&mut self) {
-        let (handle, sender) = self.shutdown.unwrap();
-        drop(sender);
-        handle.join().unwrap();
+        if let Some((handle, sender)) = self.shutdown.take() {
+            drop(sender);
+            handle.join().unwrap();
+        }
     }
 }
 

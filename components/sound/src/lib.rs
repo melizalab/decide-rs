@@ -140,6 +140,9 @@ impl Component for AudioPlayer {
             timeout: self.timeout.load(Ordering::Acquire) as i32,
         }
     }
+
+    async fn shutdown(&mut self) {
+    }
 }
 
 impl AudioPlayer {

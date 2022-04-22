@@ -80,7 +80,7 @@ impl Component for HouseLight {
                         let altitude = HouseLight::calc_altitude(fake_clock, dawn, dusk);
                         let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
-                        let write_brightness = String::from("{}", new_brightness);
+                        let write_brightness = format!("{}", new_brightness);
                         device.write_all(&write_brightness.as_bytes()).unwrap();
                         tracing::info!("Brightness written to sysfs file");
                         brightness.store(new_brightness, Ordering::Relaxed);
@@ -97,7 +97,7 @@ impl Component for HouseLight {
                         sender.send(message).await.unwrap();
                     } else {
                         let new_brightness = brightness.load(Ordering::Relaxed);
-                        let write_brightness = String::from("{}", new_brightness);
+                        let write_brightness = format!("{}", new_brightness);
                         device.write_all(&write_brightness.as_bytes()).unwrap();
                         tracing::info!("Manual brightness written to sysfs file");
                         brightness.store(new_brightness, Ordering::Relaxed);
@@ -113,11 +113,6 @@ impl Component for HouseLight {
                         };
                         sender.send(message).await.unwrap();
                     }
-
-
-
-
-
                 }
                 sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
             }
@@ -154,6 +149,7 @@ impl Component for HouseLight {
     fn get_state(&self) -> Self::State {
         Self::State {
             switch: self.switch.load(Ordering::Relaxed),
+            light_override: self.light_override.load(Ordering::Relaxed),
             fake_clock: self.fake_clock.load(Ordering::Relaxed),
             brightness: self.brightness.load(Ordering::Relaxed) as i32,
         }
