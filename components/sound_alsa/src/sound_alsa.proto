@@ -13,5 +13,4 @@ message State {
 }
 
 message Params {
-  string dir = 1;
 }

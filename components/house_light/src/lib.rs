@@ -15,6 +15,7 @@ use tokio::{self,
             sync::mpsc::{self, Sender},
             time::{Duration, sleep}
 };
+use tokio::task::JoinHandle;
 use decide_protocol::{Component, error::{ComponentError::FileAccessError, DecideError}
 };
 
@@ -24,10 +25,12 @@ pub mod proto {
 
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
+    light_override: Arc<AtomicBool>,
     fake_clock: Arc<AtomicBool>,
     brightness: Arc<AtomicU8>,
     interval: Arc<AtomicU32>,
     state_sender: mpsc::Sender<Any>,
+    task_handle: Option<JoinHandle<()>>,
 }
 
 #[async_trait]
@@ -41,10 +44,12 @@ impl Component for HouseLight {
     fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
         HouseLight {
             switch: Arc::new(AtomicBool::new(true)),
+            light_override: Arc::new(AtomicBool::new(false)),
             fake_clock: Arc::new(AtomicBool::new(false)),
             brightness: Arc::new(AtomicU8::new(0)),
             interval: Arc::new(AtomicU32::new(300)),
             state_sender,
+            task_handle: None,
         }
     }
 
@@ -61,37 +66,62 @@ impl Component for HouseLight {
         let max_brightness = config.max_brightness;
 
         let switch = self.switch.clone();
+        let light_override = self.light_override.clone();
         let fake_clock = self.fake_clock.clone();
         let brightness = self.brightness.clone();
         let interval = self.interval.clone();
         let sender = self.state_sender.clone();
 
-        tokio::spawn(async move{
+        self.task_handle = Some(tokio::spawn(async move{
             loop{
                 if switch.load(Ordering::Relaxed) {
-                    let fake_clock = fake_clock.load(Ordering::Relaxed);
-                    let altitude = HouseLight::calc_altitude(fake_clock, dawn, dusk);
-                    let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
+                    if !light_override.load(Ordering::Relaxed) {
+                        let fake_clock = fake_clock.load(Ordering::Relaxed);
+                        let altitude = HouseLight::calc_altitude(fake_clock, dawn, dusk);
+                        let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
-                    let write_brightness = String::from("{}", new_brightness);
-                    device.write_all(&write_brightness.as_bytes()).unwrap();
-                    tracing::info!("Brightness written to sysfs file");
-                    brightness.store(new_brightness, Ordering::Relaxed);
+                        let write_brightness = String::from("{}", new_brightness);
+                        device.write_all(&write_brightness.as_bytes()).unwrap();
+                        tracing::info!("Brightness written to sysfs file");
+                        brightness.store(new_brightness, Ordering::Relaxed);
+                        let state = Self::State {
+                            switch: true,
+                            light_override: false,
+                            fake_clock,
+                            brightness: new_brightness as i32
+                        };
+                        let message = Any {
+                            value: state.encode_to_vec(),
+                            type_url: Self::STATE_TYPE_URL.into(),
+                        };
+                        sender.send(message).await.unwrap();
+                    } else {
+                        let new_brightness = brightness.load(Ordering::Relaxed);
+                        let write_brightness = String::from("{}", new_brightness);
+                        device.write_all(&write_brightness.as_bytes()).unwrap();
+                        tracing::info!("Manual brightness written to sysfs file");
+                        brightness.store(new_brightness, Ordering::Relaxed);
+                        let state = Self::State {
+                            switch: true,
+                            light_override: true,
+                            fake_clock: false,
+                            brightness: new_brightness as i32
+                        };
+                        let message = Any {
+                            value: state.encode_to_vec(),
+                            type_url: Self::STATE_TYPE_URL.into(),
+                        };
+                        sender.send(message).await.unwrap();
+                    }
 
-                    let state = Self::State {
-                        switch: true,
-                        fake_clock,
-                        brightness: new_brightness as i32
-                    };
-                    let message = Any {
-                        value: state.encode_to_vec(),
-                        type_url: Self::STATE_TYPE_URL.into(),
-                    };
-                    sender.send(message).await.unwrap();
-                    sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
+
+
+
+
                 }
+                sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
             }
-        });
+        }));
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -134,6 +164,13 @@ impl Component for HouseLight {
             clock_interval: self.interval.load(Ordering::Relaxed) as i64
         }
     }
+
+    async fn shutdown(&mut self) {
+        if let Some(task_handle) = self.task_handle.take() {
+            task_handle.abort();
+            task_handle.await.unwrap_err();
+        }
+    }
 }
 
 impl HouseLight {
@@ -166,6 +203,4 @@ pub struct Config {
     fake_dawn: f64,
     fake_dusk: f64,
     max_brightness: u8,
-    //latitude: f64,
-    //longitude: f64,
 }

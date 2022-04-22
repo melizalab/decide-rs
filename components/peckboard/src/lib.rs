@@ -20,7 +20,7 @@ use std::sync::{
 };
 use std::sync::atomic::Ordering;
 use tokio::{
-    self, sync::mpsc,
+    self, sync::mpsc, task::JoinHandle
 };
 
 pub mod proto {
@@ -38,6 +38,7 @@ pub struct PeckKeys {
     peck_center: Arc<AtomicBool>,
     peck_right: Arc<AtomicBool>,
     state_sender: mpsc::Sender<Any>,
+    task_handle: Option<JoinHandle<()>>,
 }
 
 #[async_trait]
@@ -112,6 +113,11 @@ impl Component for PeckLeds {
     fn get_parameters(&self) -> Self::Params {
         Self::Params{}
     }
+
+    async fn shutdown(&mut self) {
+        self.handles.set_values(&LedColor::Off.as_value())
+            .map_err(|e:GpioError| ComponentError::LinesSetError {source:e}).unwrap();
+    }
 }
 
 #[async_trait]
@@ -128,12 +134,13 @@ impl Component for PeckKeys {
             peck_center:  Arc::new(AtomicBool::new(false)),
             peck_right:  Arc::new(AtomicBool::new(false)),
             state_sender: sender,
+            task_handle: None,
         }
     }
 
     async fn init(&mut self, config: Self::Config) {
         let sender = self.state_sender.clone();
-        tokio::spawn(async move {
+        self.task_handle = Some(tokio::spawn(async move {
             let mut chip2 = Chip::new(&config.interrupt_chip)
                 .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.interrupt_chip.clone()}).unwrap();
             let interrupt_offset = chip2.get_line(config.interrupt_offset.clone())
@@ -180,7 +187,7 @@ impl Component for PeckKeys {
                     None => {tracing::error!("PeckKey Interrupted - No Event Registered");continue},
                 }
             }
-        });
+        }));
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -204,7 +211,8 @@ impl Component for PeckKeys {
     }
 
     fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
-        todo!()
+        tracing::error!("PeckKeys set_params should not be used. Make sure your script isn't using it without good reason");
+        //Err("Don't do it again").into() //probably invalid, fix at compile time :/
     }
 
     fn get_state(&self) -> Self::State {
@@ -217,7 +225,14 @@ impl Component for PeckKeys {
     }
 
     fn get_parameters(&self) -> Self::Params {
-        todo!()
+        tracing::info!("PeckKeys Get_params is not implemented, nor recommended given speed of operation")
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(task_handle) = self.task_handle.take() {
+            task_handle.abort();
+            task_handle.await.unwrap_err();
+        }
     }
 }
 

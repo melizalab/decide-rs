@@ -1,5 +1,4 @@
-use std::sync::{Arc, atomic::{AtomicBool, //AtomicU8,
-                              Ordering}, Mutex};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}, Mutex, mpsc as std_mpsc};
 use std::thread;
 use std::time::Instant;
 
@@ -36,6 +35,7 @@ pub struct StepperMotor {
     direction: Arc<AtomicBool>,
     timeout: Arc<Mutex<u64>>,
     state_sender: mpsc::Sender<Any>,
+    shutdown: Option<(std::thread::JoinHandle<()>,tokio::task::JoinHandle<()>,std_mpsc::Sender<(bool)>)>
 }
 
 impl StepperMotor {
@@ -102,6 +102,7 @@ impl Component for StepperMotor {
             direction: Arc::new(AtomicBool::new(false)),
             timeout: Arc::new(Mutex::new(0)),
             state_sender,
+            shutdown: None,
         }
     }
 
@@ -130,11 +131,14 @@ impl Component for StepperMotor {
         let switch_offsets = config.switch_offsets;
 
         //Thread handles motor running and stopping
+        let (sd_tx, sd_rx) = std_mpsc::channel();
         let motor_thread_sender = self.state_sender.clone();
-        let _motor_thread = thread::spawn(move || {
+        let motor_handle = thread::spawn(move || {
             let mut step: usize = 0;
             StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
             loop {
+                //shutdown
+                if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {break}
                 //determine if motor is on due to starboard switches or not
                 if switch.load(Ordering::Acquire) {
                     match on.load(Ordering::Acquire) {
@@ -177,7 +181,7 @@ impl Component for StepperMotor {
         let direction = self.direction.clone();
         let switch_sender = self.state_sender.clone();
 
-        let _switch_thread = tokio::spawn( async move {
+        let switch_handle = tokio::spawn( async move {
             //init switch lines
             let line_14 = chip1.get_line(switch_offsets[0])
                 .map_err(|e:GpioError| Error::LineGetError {source:e, line: 14}).unwrap();
@@ -245,6 +249,8 @@ impl Component for StepperMotor {
                 switch_sender.send(message).await.unwrap();
             }
         });
+
+        self.shutdown = Some((motor_handle, switch_handle, sd_tx))
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -283,6 +289,15 @@ impl Component for StepperMotor {
     fn get_parameters(&self) -> Self::Params {
         Self::Params{
             timeout: *self.timeout.lock().unwrap()
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some((motor_handle, switch_handle, sd_tx)) = self.shutdown.take() {
+            switch_handle.abort();
+            drop(sd_tx);
+            task_handle.await.unwrap_err();
+            motor_handle.join().unwrap();
         }
     }
 }

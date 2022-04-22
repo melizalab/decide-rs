@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::read_dir;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use alsa::{Direction, pcm::{Access, Format, HwParams, PCM, State},
@@ -29,14 +29,14 @@ pub struct Config {
     audio_device: String,
     sample_rate: u32,
     channel: u32,
+    audio_dir: String
 }
 pub struct AlsaPlayback {
-    //mode: Arc<Mutex<String>>,
-    dir: Arc<Mutex<String>>,
     audio_id: Arc<Mutex<String>>,
     playback: Arc<Mutex<PlayBack>>, //pause or resume
     elapsed: Arc<Mutex<Option<prost_types::Duration>>>,
     state_sender: mpsc::Sender<Any>,
+    shutdown: Option<(thread::JoinHandle<()>,std_mpsc::Sender<(bool)>)>,
 }
 
 #[async_trait]
@@ -49,56 +49,56 @@ impl Component for AlsaPlayback {
 
     fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
         AlsaPlayback{
-            //mode: Arc::new(Mutex::new("".to_string())),
-            dir: Arc::new(Mutex::new("./stims".to_string())),
             audio_id: Arc::new(Mutex::new(String::from("None"))),
             playback: Arc::new(Mutex::new(PlayBack::Stop)),
             elapsed: Arc::new(Mutex::new(Some(prost_types::Duration{
                 seconds:0, nanos:0
             }))),
             state_sender,
+            shutdown: None,
         }
     }
 
     async fn init(&mut self, config: Self::Config) {
-        let dir = self.dir.clone();
+
+        let dir = config.audio_dir;
+
         let audio_id = self.audio_id.clone();
         let playback = self.playback.clone();
         let elapsed = self.elapsed.clone();
         let sender = self.state_sender.clone();
+
         let queue: Arc<Mutex<HashMap<OsString, Vec<i16>>>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let queue1 = queue.clone();
-        thread::spawn(move|| {
-            let mut old_dir = dir.lock().unwrap().clone();
-            loop {
-                let mut stim_queue = queue1.lock().unwrap();
-                let new_dir = dir.lock().unwrap().clone();
-                if new_dir != old_dir {
-                    old_dir = new_dir;
-                    let mut reader = read_dir(Path::new(&old_dir)).unwrap();
-                    let mut entry= reader.next();
-                    if entry.is_some() {
-                        while entry.is_some() {
-                            let file = entry.unwrap().unwrap();
-                            let path = file.path();
-                            let fname = file.file_name();
-                            if !stim_queue.contains_key(&fname) {
-                                if path.extension().unwrap() == "wav" {
-                                    let wav = audrey::open(path).unwrap();
-                                    let wav_channels = wav.description().channel_count();
-                                    let hw_channels = config.channel.clone();
-                                    let audio = process_audio(wav, wav_channels, hw_channels);
-                                    stim_queue.insert(fname,audio);
-                                }
-                            }
-                            entry = reader.next();
+
+        tokio::spawn(async move {
+            let mut reader = read_dir(Path::new(&dir)).unwrap();
+            let mut entry= reader.next();
+            if entry.is_some() {
+                while entry.is_some() {
+                    let file = entry.unwrap().unwrap();
+                    let path = file.path();
+                    let fname = file.file_name();
+                    let mut stim_queue = queue1.lock().unwrap();
+                    if !stim_queue.contains_key(&fname) {
+                        if path.extension().unwrap() == "wav" {
+                            let wav = audrey::open(path).unwrap();
+                            let wav_channels = wav.description().channel_count();
+                            let hw_channels = config.channel.clone();
+                            let audio = process_audio(wav, wav_channels, hw_channels);
+                            stim_queue.insert(fname,audio);
                         }
                     }
-                } else {thread::sleep(Duration::from_secs(60))}
+                    entry = reader.next();
+                }
             }
+            tracing::info!("Finished importing audio files")
         });
+
+        let (sd_tx, sd_rx) = std_mpsc::channel();
+
         let queue2 = queue.clone();
-        thread::spawn(move|| {
+        let handle = thread::spawn(move|| {
             let pcm = PCM::new(&*config.audio_device, Direction::Playback, false)
                 .map_err(|_e| ComponentError::PcmInitErr {  dev_name: config.audio_device.clone() }).unwrap();
 
@@ -122,11 +122,14 @@ impl Component for AlsaPlayback {
                 .unwrap();
 
             'stim: loop {
+                //shutdown
+                if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {break};
+
                 let stim = audio_id.lock().unwrap();
                 let p = playback.lock().unwrap().clone();
                 if p == PlayBack::Playing {
                     if stim.ends_with("wav")  {
-                        let stim_queue = queue2.lock().unwrap().clone();
+                        let stim_queue = queue2.lock().unwrap();
                         let stim_name = OsString::from(stim.clone());
                         let mut elapsed = elapsed.lock().unwrap();
                         pcm.hw_params(&hwp).unwrap();
@@ -134,6 +137,9 @@ impl Component for AlsaPlayback {
                         io.writei(data).unwrap();
                         let timer = std::time::Instant::now();
                         'playback: while pcm.state() == State::Running {
+                            //shutdown check
+                            if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {break 'stim}
+
                             let p = playback.try_lock().unwrap().clone();
                             match p {
                                 PlayBack::Next => {
@@ -174,10 +180,13 @@ impl Component for AlsaPlayback {
                     } else {
                         tracing::error!("Playback set to Playing but filename is invalid");
                         thread::sleep(Duration::from_millis(1000)); continue 'stim}
-                } else {thread::sleep(Duration::from_millis(1000)); continue}
+                } else {
+                    thread::sleep(Duration::from_millis(1000)); continue
+                }
             }
         });
 
+        self.shutdown = Some((handle, sd_tx));
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -222,6 +231,12 @@ impl Component for AlsaPlayback {
             dir : self.dir.try_lock().unwrap().clone()
         }
 
+    }
+
+    async fn shutdown(&mut self) {
+        let (handle, sender) = self.shutdown.unwrap();
+        drop(sender);
+        handle.join().unwrap();
     }
 }
 

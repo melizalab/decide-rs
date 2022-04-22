@@ -2,8 +2,9 @@ syntax = "proto3";
 
 message State {
   bool switch = 1;
-  bool fake_clock = 2;
-  int32 brightness = 3;
+  bool light_override = 2;
+  bool fake_clock = 3;
+  int32 brightness = 4;
 }
 
 message Params {
