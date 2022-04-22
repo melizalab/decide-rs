@@ -23,6 +23,10 @@ test-log = { version = "0.2.8", default-features = false, features = ["trace"] }
 env_logger = "*"
 tracing = {version = "0.1", default-features = false}
 tracing-subscriber = {version = "0.3", default-features = false, features = ["env-filter", "fmt"]}
+rstest = "0.12.0"
+decide-core = { path = "../../decide-core"}
+async-std = { version = "1.5", features = ["attributes"] }
+
 
 [build-dependencies]
 prost-build = "0.9"

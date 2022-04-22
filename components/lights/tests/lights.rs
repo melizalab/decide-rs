@@ -1,3 +1,4 @@
+use decide_core::{run, ComponentCollection};
 use decide_protocol::{
     proto::{reply, ComponentParams, Config, Pub, Reply, StateChange},
     Component, ComponentName, ComponentRequest, GeneralRequest, Request, RequestType, PUB_ENDPOINT,
@@ -11,6 +12,31 @@ use tmq::{request, subscribe, Context, Multipart};
 use tokio::test;
 #[macro_use]
 extern crate tracing;
+use rstest::*;
+
+struct Decide;
+
+impl Drop for Decide {
+    fn drop(&mut self) {
+        panic!("darn");
+    }
+}
+
+#[fixture]
+#[once]
+fn decide() -> Decide {
+    tokio::spawn(async {
+        let config = "
+            house-lights:
+              driver: Lights
+              config:
+                pin: 4";
+        let (components, state_stream) = ComponentCollection::from_reader(config.as_bytes())?;
+        let res = run::launch_decide(components, state_stream)?;
+        res.await
+    });
+    return Decide;
+}
 
 async fn send_request(message: Request) -> anyhow::Result<reply::Result> {
     let ctx = Context::new();
@@ -72,8 +98,9 @@ macro_rules! unlock {
     }};
 }
 
+#[rstest]
 #[test]
-async fn locking_behavior() -> anyhow::Result<()> {
+async fn locking_behavior(decide: &Decide) -> anyhow::Result<()> {
     let result = lock!();
     assert_eq!(result, reply::Result::Ok(()));
     let result = lock!();
@@ -89,8 +116,9 @@ async fn locking_behavior() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[rstest]
 #[test]
-async fn parameters() {
+async fn parameters(decide: &Decide) {
     let params = Any {
         type_url: String::from(Lights::PARAMS_TYPE_URL),
         value: lights::proto::Params { blink: false }.encode_to_vec(),
@@ -114,9 +142,9 @@ async fn parameters() {
     assert_eq!(result, reply::Result::Params(params));
 }
 
-#[test_log::test(test)]
-//#[ignore = "the Lights component doesn't work right"]
-async fn state() {
+#[rstest]
+#[test]
+async fn state(decide: &Decide) {
     let state = Any {
         type_url: String::from(Lights::STATE_TYPE_URL),
         value: lights::proto::State { on: true }.encode_to_vec(),

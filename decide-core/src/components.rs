@@ -94,6 +94,8 @@ macro_rules! impl_components {
                         fn get_state(&self) -> Self::State {
                             self.state.clone()
                         }
+
+                        async fn shutdown(&mut self) {}
                     }
                     )*
             }
@@ -131,6 +133,14 @@ macro_rules! impl_components {
                     match self {
                         $(
                             ComponentKind::$component(t) => t.init(types::$component::deserialize_config(config).unwrap()).await,
+                        )*
+                    }
+                }
+
+                pub async fn shutdown(&mut self) {
+                    match self {
+                        $(
+                            ComponentKind::$component(t) => t.shutdown().await,
                         )*
                     }
                 }

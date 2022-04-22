@@ -11,7 +11,7 @@ decide-protocol = { path = "../decide-protocol" }
 lights = { path = "../components/lights" }
 tmq = "0.3.0"
 zmq = "0.9.2"
-log = "0.4.14"
+log = "0.4.16"
 tokio = { version = "1.13", features = ["full"] }
 pretty_env_logger = "0.4.0"
 prost = "0.9"
