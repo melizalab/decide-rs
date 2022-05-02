@@ -16,7 +16,7 @@ use serde::Deserialize;
 use tokio::{self, sync::mpsc::{self, Sender}};
 
 use decide_protocol::{Component,
-                      error::{ComponentError, DecideError}
+                      error::{DecideError}
 };
 use futures::executor::block_on;
 use proto::state::PlayBack;
@@ -72,17 +72,22 @@ impl Component for AlsaPlayback {
         let queue1 = queue.clone();
 
         tokio::spawn(async move {
-            let mut reader = read_dir(Path::new(&dir)).unwrap();
+            let mut reader = read_dir(Path::new(&dir))
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let mut entry= reader.next();
             if entry.is_some() {
                 while entry.is_some() {
-                    let file = entry.unwrap().unwrap();
+                    let file = entry
+                        .unwrap()
+                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                     let path = file.path();
                     let fname = file.file_name();
-                    let mut stim_queue = queue1.lock().unwrap();
+                    let mut stim_queue = queue1.lock()
+                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                     if !stim_queue.contains_key(&fname) {
                         if path.extension().unwrap() == "wav" {
-                            let wav = audrey::open(path).unwrap();
+                            let wav = audrey::open(path)
+                                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                             let wav_channels = wav.description().channel_count();
                             let hw_channels = config.channel.clone();
                             let audio = process_audio(wav, wav_channels, hw_channels);
@@ -100,30 +105,35 @@ impl Component for AlsaPlayback {
         let queue2 = queue.clone();
         let handle = thread::spawn(move|| {
             let pcm = PCM::new(&*config.audio_device, Direction::Playback, false)
-                .map_err(|_e| ComponentError::PcmInitErr {  dev_name: config.audio_device.clone() }).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
             let hwp = HwParams::any(&pcm)
-                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("init")}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             hwp.set_channels(config.channel)
-                .map_err(|_e| ComponentError::PcmHwConfigErr { param: String::from("channel")}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             hwp.set_rate(config.sample_rate, ValueOr::Nearest)
-                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("sample_rate")}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             hwp.set_access(Access::RWInterleaved)
-                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("access")}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             hwp.set_format(Format::s16())
-                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("format")}).unwrap();
-            pcm.hw_params(&hwp).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            pcm.hw_params(&hwp)
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
-            let swp = pcm.sw_params_current().unwrap();
-            swp.set_start_threshold(hwp.get_buffer_size().unwrap()).unwrap();
-            pcm.sw_params(&swp).unwrap();
+            let swp = pcm.sw_params_current()
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            swp.set_start_threshold(hwp.get_buffer_size().unwrap())
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            pcm.sw_params(&swp)
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let io = pcm.io_i16()
-                .map_err(|_e| ComponentError::PcmHwConfigErr {param: String::from("io_i16")})
-                .unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
             'stim: loop {
                 //shutdown
-                if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {break};
+                if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
+                    pcm.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    break};
 
                 let stim = audio_id.lock().unwrap();
                 let p = playback.lock().unwrap().clone();
@@ -132,18 +142,23 @@ impl Component for AlsaPlayback {
                         let stim_queue = queue2.lock().unwrap();
                         let stim_name = OsString::from(stim.clone());
                         let mut elapsed = elapsed.lock().unwrap();
-                        pcm.hw_params(&hwp).unwrap();
+                        pcm.hw_params(&hwp)
+                            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                         let data = stim_queue.get(&*stim_name).unwrap();
-                        io.writei(data).unwrap();
+                        io.writei(data).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                        tracing::debug!("Begin playback");
                         let timer = std::time::Instant::now();
                         'playback: while pcm.state() == State::Running {
                             //shutdown check
-                            if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {break 'stim}
+                            if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
+                                pcm.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                break 'stim}
 
                             let p = playback.try_lock().unwrap().clone();
                             match p {
                                 PlayBack::Next => {
-                                    pcm.drop().unwrap();
+                                    pcm.drop()
+                                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                                     let duration = Some(prost_types::Duration::from(timer.elapsed()));
                                     *elapsed = duration.clone();
                                     let mut playback = playback.lock().unwrap();
@@ -157,7 +172,9 @@ impl Component for AlsaPlayback {
                                         value: state.encode_to_vec(),
                                         type_url: Self::STATE_TYPE_URL.into(),
                                     };
-                                    block_on(sender.send(message)).unwrap_err();
+                                    block_on(sender.send(message))
+                                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                    tracing::debug!("Next audio, elapsed time recorded");
                                     continue 'stim}
                                 PlayBack::Stop => {
                                     let duration = Some(prost_types::Duration::from(timer.elapsed()));
@@ -172,7 +189,9 @@ impl Component for AlsaPlayback {
                                         value: state.encode_to_vec(),
                                         type_url: Self::STATE_TYPE_URL.into(),
                                     };
-                                    block_on(sender.send(message)).unwrap();
+                                    block_on(sender.send(message))
+                                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                    tracing::debug!("Stop audio,  elapsed time recorded");
                                     continue 'stim}
                                 PlayBack::Playing => {continue 'playback}
                             };
@@ -232,7 +251,8 @@ impl Component for AlsaPlayback {
     async fn shutdown(&mut self) {
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
-            handle.join().unwrap();
+            handle.join()
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
         }
     }
 }

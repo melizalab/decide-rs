@@ -16,8 +16,7 @@ use tokio::{self,
             time::{Duration, sleep}
 };
 use tokio::task::JoinHandle;
-use decide_protocol::{Component, error::{ComponentError::FileAccessError, DecideError}
-};
+use decide_protocol::{Component, error::DecideError};
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
@@ -59,7 +58,7 @@ impl Component for HouseLight {
             .write(true)
             .read(true)
             .open(Path::new(&dev_path))
-            .map_err(|e| FileAccessError {source:e, dir: dev_path.clone()})
+            .map_err(|e| DecideError::Component {source:e.into()})
             .unwrap();
         let dawn = config.fake_dawn;
         let dusk = config.fake_dusk;
@@ -81,8 +80,10 @@ impl Component for HouseLight {
                         let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
                         let write_brightness = format!("{}", new_brightness);
-                        device.write_all(&write_brightness.as_bytes()).unwrap();
-                        tracing::info!("Brightness written to sysfs file");
+                        device.write_all(&write_brightness.as_bytes())
+                            .map_err(|e|DecideError::Component {source:e.into()})
+                            .unwrap();
+                        tracing::debug!("Brightness written to sysfs file");
                         brightness.store(new_brightness, Ordering::Relaxed);
                         let state = Self::State {
                             switch: true,
@@ -94,12 +95,16 @@ impl Component for HouseLight {
                             value: state.encode_to_vec(),
                             type_url: Self::STATE_TYPE_URL.into(),
                         };
-                        sender.send(message).await.unwrap();
+                        sender.send(message).await
+                            .map_err(|e| DecideError::Component { source: e.into() })
+                            .unwrap();
                     } else {
                         let new_brightness = brightness.load(Ordering::Relaxed);
                         let write_brightness = format!("{}", new_brightness);
-                        device.write_all(&write_brightness.as_bytes()).unwrap();
-                        tracing::info!("Manual brightness written to sysfs file");
+                        device.write_all(&write_brightness.as_bytes())
+                            .map_err(|e| DecideError::Component { source: e.into() })
+                            .unwrap();
+                        tracing::debug!("Manual brightness written to sysfs file");
                         brightness.store(new_brightness, Ordering::Relaxed);
                         let state = Self::State {
                             switch: true,
@@ -111,7 +116,9 @@ impl Component for HouseLight {
                             value: state.encode_to_vec(),
                             type_url: Self::STATE_TYPE_URL.into(),
                         };
-                        sender.send(message).await.unwrap();
+                        sender.send(message).await
+                            .map_err(|e| DecideError::Component { source: e.into() })
+                            .unwrap();
                     }
                 }
                 sleep(Duration::from_secs(interval.load(Ordering::Relaxed) as u64)).await;
@@ -135,7 +142,7 @@ impl Component for HouseLight {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("House-light state changed");
+            tracing::debug!("House-light state changed");
         });
 
         Ok(())
@@ -164,7 +171,9 @@ impl Component for HouseLight {
     async fn shutdown(&mut self) {
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
-            task_handle.await.unwrap_err();
+            task_handle.await
+                .map_err(|e| DecideError::Component { source: e.into() })
+                .unwrap_err();
         }
     }
 }

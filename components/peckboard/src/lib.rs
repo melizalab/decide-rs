@@ -8,8 +8,7 @@ use futures::stream::StreamExt;
 use tokio::sync::mpsc::Sender;
 use async_trait::async_trait;
 use decide_protocol::{Component,
-                   error::{ComponentError, DecideError}
-};
+                   error::DecideError};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
@@ -51,11 +50,11 @@ impl Component for PeckLeds {
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
         let mut chip4 = Chip::new(config.peckboard_chip.clone())
-            .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.peckboard_chip.clone()}).unwrap();
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
         let handles = chip4.get_lines(&config.led_offsets.clone())
-            .map_err(|e:GpioError| ComponentError::LinesGetError {source:e, lines: config.led_offsets.clone()}).unwrap()
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
             .request(LineRequestFlags::OUTPUT, &[0,0,0], "PeckLeds")
-            .map_err(|e:GpioError| ComponentError::LinesReqError {source:e, lines: config.led_offsets.clone()}).unwrap();
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
         PeckLeds {
             handles,
             led_state: LedColor::Off,
@@ -64,7 +63,7 @@ impl Component for PeckLeds {
     }
 
     async fn init(&mut self, _config: Self::Config) {
-        tracing::info!("PeckLed init is empty")
+        tracing::debug!("PeckLed init is empty")
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -78,7 +77,7 @@ impl Component for PeckLeds {
         }
         let lines_value = self.led_state.as_value();
         self.handles.set_values(&lines_value)
-            .map_err(|e:GpioError| ComponentError::LinesSetError {source:e}).unwrap();
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
             sender
@@ -116,7 +115,7 @@ impl Component for PeckLeds {
 
     async fn shutdown(&mut self) {
         self.handles.set_values(&LedColor::Off.as_value())
-            .map_err(|e:GpioError| ComponentError::LinesSetError {source:e}).unwrap();
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     }
 }
 
@@ -140,29 +139,30 @@ impl Component for PeckKeys {
 
     async fn init(&mut self, config: Self::Config) {
         let sender = self.state_sender.clone();
+
         self.task_handle = Some(tokio::spawn(async move {
             let mut chip2 = Chip::new(&config.interrupt_chip)
-                .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.interrupt_chip.clone()}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let interrupt_offset = chip2.get_line(config.interrupt_offset.clone())
-                .map_err(|e:GpioError| ComponentError::LineGetError {source:e, line: config.interrupt_offset.clone()}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let mut interrupt = AsyncLineEventHandle::new(interrupt_offset.events(
                 LineRequestFlags::INPUT,
                 EventRequestFlags::BOTH_EDGES,
                 "Peckboard Interrupt"
             ).unwrap())
-                .map_err(|e:GpioError| ComponentError::AsyncEvntReqError {source:e, line:config.interrupt_offset.clone()}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
             let mut chip4 = Chip::new(config.peckboard_chip.clone())
-                .map_err(|e:GpioError| ComponentError::ChipError {source:e, chip: config.peckboard_chip.clone()}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             chip4.get_lines(&config.ir_offsets)
-                .map_err(|e:GpioError|ComponentError::LinesGetError {source:e, lines: config.ir_offsets.clone()}).unwrap()
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
                 .request(LineRequestFlags::OUTPUT, &[1,1,1], "peckboard_ir")
-                .map_err(|e:GpioError| ComponentError::LinesReqError {source:e, lines: config.ir_offsets.clone()}).unwrap();
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let key_handles: MultiLineHandle = chip4.get_lines(&config.key_offsets)
-                .map_err(|e:GpioError| ComponentError::LinesGetError {source:e, lines: config.key_offsets.clone()}).unwrap()
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
                 .request(LineRequestFlags::INPUT, &[0,0,0], "peck_keys")
-                .map_err(|e: GpioError| ComponentError::LinesReqError {source:e, lines: config.key_offsets.clone()}).unwrap();
-            tracing::trace!("PeckKey Handles created");
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            tracing::debug!("PeckKey Handles created");
 
             loop {
                 match interrupt.next().await {
@@ -171,8 +171,9 @@ impl Component for PeckKeys {
                         //    EventType::FallingEdge => {}
                         //    EventType::RisingEdge => {}
                         //} no need to match if state is updated with any event
-                        tracing::trace!("PeckKey Interrupted - Event Registered");
-                        let values = key_handles.get_values().unwrap();
+                        tracing::debug!("PeckKey Interrupted - Event Registered");
+                        let values = key_handles.get_values()
+                            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                         let state = Self::State {
                             peck_left: values[0] != 0, //
                             peck_center: values[1] != 0,
@@ -182,7 +183,8 @@ impl Component for PeckKeys {
                             value: state.encode_to_vec(),
                             type_url: Self::STATE_TYPE_URL.into(),
                         };
-                        sender.send(message).await.unwrap();
+                        sender.send(message).await
+                            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                     }
                     None => {tracing::error!("PeckKey Interrupted - No Event Registered");continue},
                 }
@@ -211,7 +213,7 @@ impl Component for PeckKeys {
     }
 
     fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
-        tracing::error!("PeckKeys set_params should not be used. Make sure your script isn't using it without good reason");
+        tracing::error!("PeckKeys set_params is empty. Make sure your script isn't using it without good reason");
         Ok(())
     }
 
@@ -231,7 +233,8 @@ impl Component for PeckKeys {
     async fn shutdown(&mut self) {
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
-            task_handle.await.unwrap_err();
+            task_handle.await
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap_err();
         }
     }
 }

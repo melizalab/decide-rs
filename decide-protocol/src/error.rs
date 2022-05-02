@@ -58,7 +58,7 @@ pub enum ClientError {
     WrongAnyProtoType { actual: String, expected: String },
 }
 
-#[derive(Error, Debug)]
+/*#[derive(Error, Debug)]
 pub enum ComponentError {
     #[error("Failed to open file")]
     FileAccessError {
@@ -123,7 +123,7 @@ pub enum ComponentError {
     PcmHwConfigErr {
         param: String,
     }
-}
+}*/
 
 #[derive(Error, Debug)]
 pub enum ControllerError {
