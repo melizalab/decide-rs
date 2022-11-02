@@ -15,7 +15,7 @@ Since this workspace only contains a single binary crate, `decide-core`, you can
 To compile for a specific architecture (BBB in our case), use `cross` (make sure you have `docker` installed):
 ```bash
 cargo install cross
-docker build -t decide/image:tag ./
+docker build -t decide-rs/image:tag ./
 cross build --target armv7-unknown-linux-gnueabihf --release
 ```
 
