@@ -44,8 +44,8 @@ impl Component for AlsaPlayback {
     type State = proto::State;
     type Params = proto::Params;
     type Config = Config;
-    const STATE_TYPE_URL: &'static str = "";
-    const PARAMS_TYPE_URL: &'static str = "";
+    const STATE_TYPE_URL: &'static str = "melizalab.org/proto/sound_alsa_state";
+    const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/sound_alsa_params";
 
     fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
         AlsaPlayback{
@@ -71,32 +71,43 @@ impl Component for AlsaPlayback {
         let queue: Arc<Mutex<HashMap<OsString, Vec<i16>>>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let queue1 = queue.clone();
 
+        //read in audio files
         tokio::spawn(async move {
             let mut reader = read_dir(Path::new(&dir))
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let mut entry= reader.next();
+            //fails if provided dir is empty
             if entry.is_some() {
+                //begin reading files
                 while entry.is_some() {
                     let file = entry
                         .unwrap()
                         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    //path() returns the full path of the file
                     let path = file.path();
-                    let fname = file.file_name();
+                    //strip the stored dir from full path
+                    let fname = OsString::from(path.clone().strip_prefix(&dir)
+                        .map_err(|e|DecideError::Component { source: e.into() })
+                        .unwrap());
+
                     let mut stim_queue = queue1.lock()
-                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                        .map_err(|e| println!("Couldn't acquire lock on playlist"))
+                        .unwrap();
+                    //avoid duplicates
                     if !stim_queue.contains_key(&fname) {
+                        //make sure file is an audio file with "wav" extension
                         if path.extension().unwrap() == "wav" {
                             let wav = audrey::open(path)
                                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                             let wav_channels = wav.description().channel_count();
                             let hw_channels = config.channel.clone();
                             let audio = process_audio(wav, wav_channels, hw_channels);
-                            stim_queue.insert(fname,audio);
+                            stim_queue.insert(OsString::from(fname), audio);
                         }
                     }
                     entry = reader.next();
                 }
-            }
+            } else {tracing::info!("Audio Directory is empty!")}
             tracing::info!("Finished importing audio files")
         });
 
@@ -159,14 +170,15 @@ impl Component for AlsaPlayback {
                                 PlayBack::Next => {
                                     pcm.drop()
                                         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                                    let duration = Some(prost_types::Duration::from(timer.elapsed()));
-                                    *elapsed = duration.clone();
+                                    let duration = prost_types::Duration::try_from(timer.elapsed())
+                                                            .map_err(|e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                                    *elapsed = Some(duration.clone());
                                     let mut playback = playback.lock().unwrap();
                                     *playback = PlayBack::Playing;
                                     let state = Self::State {
                                         audio_id: audio_id.lock().unwrap().clone(),
                                         playback: PlayBack::Playing as i32,
-                                        elapsed: duration
+                                        elapsed: Some(duration)
                                     };
                                     let message = Any {
                                         value: state.encode_to_vec(),
@@ -177,13 +189,14 @@ impl Component for AlsaPlayback {
                                     tracing::debug!("Next audio, elapsed time recorded");
                                     continue 'stim}
                                 PlayBack::Stop => {
-                                    let duration = Some(prost_types::Duration::from(timer.elapsed()));
-                                    *elapsed = duration.clone();
+                                    let duration = prost_types::Duration::try_from(timer.elapsed())
+                                                            .map_err(|e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                                    *elapsed = Some(duration.clone());
                                     pcm.drop().unwrap();
                                     let state = Self::State {
                                         audio_id: String::from("None"),
                                         playback: PlayBack::Stop as i32,
-                                        elapsed: duration
+                                        elapsed: Some(duration)
                                     };
                                     let message = Any {
                                         value: state.encode_to_vec(),
@@ -252,7 +265,9 @@ impl Component for AlsaPlayback {
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
             handle.join()
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
+                //disable mapping here due to multiple errors
+                //.map_err(|e| DecideError::Component { source: e.into() })
+                .unwrap()
         }
     }
 }

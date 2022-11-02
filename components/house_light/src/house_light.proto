@@ -3,7 +3,7 @@ syntax = "proto3";
 message State {
   bool switch = 1;
   bool light_override = 2;
-  bool fake_clock = 3;
+  bool ephemera = 3;
   int32 brightness = 4;
 }
 

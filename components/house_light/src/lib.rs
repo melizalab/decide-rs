@@ -25,7 +25,7 @@ pub mod proto {
 pub struct HouseLight {
     switch: Arc<AtomicBool>,
     light_override: Arc<AtomicBool>,
-    fake_clock: Arc<AtomicBool>,
+    ephemera: Arc<AtomicBool>,
     brightness: Arc<AtomicU8>,
     interval: Arc<AtomicU32>,
     state_sender: mpsc::Sender<Any>,
@@ -44,7 +44,7 @@ impl Component for HouseLight {
         HouseLight {
             switch: Arc::new(AtomicBool::new(true)),
             light_override: Arc::new(AtomicBool::new(false)),
-            fake_clock: Arc::new(AtomicBool::new(false)),
+            ephemera: Arc::new(AtomicBool::new(false)),
             brightness: Arc::new(AtomicU8::new(0)),
             interval: Arc::new(AtomicU32::new(300)),
             state_sender,
@@ -66,7 +66,7 @@ impl Component for HouseLight {
 
         let switch = self.switch.clone();
         let light_override = self.light_override.clone();
-        let fake_clock = self.fake_clock.clone();
+        let ephemera = self.ephemera.clone();
         let brightness = self.brightness.clone();
         let interval = self.interval.clone();
         let sender = self.state_sender.clone();
@@ -75,8 +75,8 @@ impl Component for HouseLight {
             loop{
                 if switch.load(Ordering::Relaxed) {
                     if !light_override.load(Ordering::Relaxed) {
-                        let fake_clock = fake_clock.load(Ordering::Relaxed);
-                        let altitude = HouseLight::calc_altitude(fake_clock, dawn, dusk);
+                        let ephemera = ephemera.load(Ordering::Relaxed);
+                        let altitude = HouseLight::calc_altitude(ephemera, dawn, dusk);
                         let new_brightness = HouseLight::calc_brightness(altitude, max_brightness);
 
                         let write_brightness = format!("{}", new_brightness);
@@ -88,7 +88,7 @@ impl Component for HouseLight {
                         let state = Self::State {
                             switch: true,
                             light_override: false,
-                            fake_clock,
+                            ephemera,
                             brightness: new_brightness as i32
                         };
                         let message = Any {
@@ -109,7 +109,7 @@ impl Component for HouseLight {
                         let state = Self::State {
                             switch: true,
                             light_override: true,
-                            fake_clock: false,
+                            ephemera: false,
                             brightness: new_brightness as i32
                         };
                         let message = Any {
@@ -130,7 +130,7 @@ impl Component for HouseLight {
         let sender = self.state_sender.clone();
 
         self.switch.store(state.switch, Ordering::Relaxed);
-        self.fake_clock.store(state.fake_clock, Ordering::Relaxed);
+        self.ephemera.store(state.ephemera, Ordering::Relaxed);
         self.brightness.store(state.brightness as u8, Ordering::Relaxed);
 
         tokio::spawn(async move {
@@ -157,7 +157,7 @@ impl Component for HouseLight {
         Self::State {
             switch: self.switch.load(Ordering::Relaxed),
             light_override: self.light_override.load(Ordering::Relaxed),
-            fake_clock: self.fake_clock.load(Ordering::Relaxed),
+            ephemera: self.ephemera.load(Ordering::Relaxed),
             brightness: self.brightness.load(Ordering::Relaxed) as i32,
         }
     }
@@ -185,8 +185,8 @@ impl HouseLight {
         let brightness = if x > 0 { x } else { 0 };
         brightness
     }
-    fn calc_altitude(fake_clock: bool, dawn: f64, dusk: f64) -> f64 {
-        return if fake_clock {
+    fn calc_altitude(ephemera: bool, dawn: f64, dusk: f64) -> f64 {
+        return if ephemera {
             let now: DateTime<Utc> = DateTime::from(SystemTime::now());
             let now = (now.hour() + (now.minute() / 60) + (now.second() / 3600)) as f64;
             let x: f64 = (now + 24.0 - dawn) % 24.0;
