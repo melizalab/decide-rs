@@ -30,3 +30,4 @@ async-std = { version = "1.5", features = ["attributes"] }
 
 [build-dependencies]
 prost-build = "0.11.1"
+protobuf-src = "1.1.0+21.5"
