@@ -4,8 +4,8 @@ import "google/protobuf/duration.proto";
 message State {
   string audio_id = 1;
   enum PlayBack {
-    PLAYING = 0;
-    STOP = 1;
+    STOPPED = 0;
+    PLAYING = 1;
     NEXT = 2;
   }
   PlayBack playback = 2;
@@ -13,4 +13,6 @@ message State {
 }
 
 message Params {
+  string audio_dir = 1;
+  uint32 audio_count = 2;
 }
