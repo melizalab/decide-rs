@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}, Mutex, mpsc as std_mpsc};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}, Mutex, Condvar, mpsc as std_mpsc};
 use std::thread;
 use std::time::Instant;
 
@@ -31,7 +31,7 @@ pub mod proto {
 struct LinesVal([u8; 2]);
 pub struct StepperMotor {
     switch: Arc<AtomicBool>,
-    on: Arc<AtomicBool>,
+    on_paired: Arc<(Mutex<bool>, Condvar)>,
     direction: Arc<AtomicBool>,
     timeout: Arc<Mutex<u64>>,
     state_sender: mpsc::Sender<Any>,
@@ -100,7 +100,7 @@ impl Component for StepperMotor {
     fn new(_config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
         StepperMotor {
             switch: Arc::new(AtomicBool::new(true)),
-            on: Arc::new(AtomicBool::new(false)),
+            on_paired: Arc::new((Mutex::new(false), Condvar::new())),
             direction: Arc::new(AtomicBool::new(false)),
             timeout: Arc::new(Mutex::new(0)),
             state_sender,
@@ -127,7 +127,7 @@ impl Component for StepperMotor {
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
         let switch = self.switch.clone();
-        let on = self.on.clone();
+        let on_paired = self.on_paired.clone();
         let direction = self.direction.clone();
         let timeout = Arc::clone(&self.timeout);
 
@@ -145,64 +145,63 @@ impl Component for StepperMotor {
                 if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
                     StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
                     break}
+
                 //switch: True & on: True -> Cape switches pressed, loop with dt pauses
                 //switch: False & on: True -> Experiment Script signal
                 //switch: True/False & on: False -> Resting state
-                if switch.load(Ordering::Acquire) {
-                    match on.load(Ordering::Acquire) {
-                        true => {
-                            tracing::debug!("Switch push detected, running motor");
-                            step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
-                                                           direction.load(Ordering::Acquire));
-                        }
-                        //Resting State, no signal sent
-                        false => {
+
+                let (on_lock, on_cvar) = &*on_paired;
+                //wait until on signaled as set to True
+                let _on_guard = on_cvar.wait_while(on_lock.lock().unwrap(), |running| {!*running })
+                    .map_err(|e| DecideError::Component {source: e.into()}).unwrap();
+
+                let cape_pressed = switch.load(Ordering::Acquire);
+                if cape_pressed {
+                    tracing::debug!("Switch push detected, running motor");
+                    'motor_switch: loop {
+                        step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
+                                                       direction.load(Ordering::Acquire));
+                        if !on_lock.lock().unwrap() {
                             StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
+                            break 'motor_switch
                         }
+                        thread::sleep(Duration::from_micros(dt));
                     }
                 } else {
-                    match on.load(Ordering::Acquire) {
-                        //Run motor for timeout duration
-                        true => {
-                            tracing::debug!("Running motor due to sent signal");
-                            let timer = Instant::now();
-                            //Run while timeout is elapsing
-                            while Instant::now().duration_since(timer) < Duration::from_millis(*timeout.lock().unwrap()) {
-                                step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
-                                                               direction.load(Ordering::Acquire));
-                                thread::sleep(Duration::from_micros(dt));
-                            }
-                            tracing::debug!("Stopping motor after timeout");
-                            //Reset to rest
-                            on.store(false, Ordering::Release);
-                            //leave Switch on false until flipped by cape press
-                            //Send signal
-                            tracing::debug!("Sending motor timeout signal");
-                            let state = Self::State {
-                                switch: switch.load(Ordering::Acquire), //false
-                                on: on.load(Ordering::Acquire), //true?
-                                direction: direction.load(Ordering::Acquire), //refer to line 151
-                            };
-                            block_on(motor_thread_sender
-                                .send(Any {
-                                    type_url: String::from(Self::STATE_TYPE_URL),
-                                    value: state.encode_to_vec(),
-                                })
-                            ).map_err(|e| DecideError::Component { source: e.into() })
-                                .unwrap();
-                        }
-                        //Resting State, no signal necessary
-                        false => {
-                            StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
-                        }
-                    }
+                    tracing::debug!("Running motor due to sent signal");
+                    let timer = Instant::now();
+                    while Instant::now().duration_since(timer) < Duration::from_millis(*timeout.lock().unwrap()) {
+                        step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
+                                                       direction.load(Ordering::Acquire));
+                        thread::sleep(Duration::from_micros(dt));
+                    };
+                    tracing::debug!("Stopping motor after timeout");
+                    //Reset to rest
+                    let running = on_lock.lock().unwrap();
+                    *running = false;
+                    //leave Switch on false until flipped by cape press
+
+                    //Send signal
+                    tracing::debug!("Sending motor timeout signal");
+                    let state = Self::State {
+                        switch: switch.load(Ordering::Acquire), //false
+                        on: on_lock.lock().unwrap(), //true?
+                        direction: direction.load(Ordering::Acquire), //refer to line 151
+                    };
+                    block_on(motor_thread_sender
+                        .send(Any {
+                            type_url: String::from(Self::STATE_TYPE_URL),
+                            value: state.encode_to_vec(),
+                        })
+                    ).map_err(|e| DecideError::Component { source: e.into() })
+                        .unwrap();
+
                 }
-                thread::sleep(Duration::from_micros(dt));
             }
         });
 
         let switch = self.switch.clone();
-        let on = self.on.clone();
+        let on_paired2 = Arc::clone(&self.on_paired);
         let direction = self.direction.clone();
         let switch_sender = self.state_sender.clone();
 
@@ -230,6 +229,8 @@ impl Component for StepperMotor {
                 ).map_err(|e| DecideError::Component { source: e.into() }).unwrap()
             ).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
+            let (on_lock, on_cvar) = &*on_paired2;
+
             loop {
                 tokio::select! {
                     Some(event) = handle_14.next() => {
@@ -238,12 +239,15 @@ impl Component for StepperMotor {
                         match evt_type {
                             EventType::RisingEdge => {
                                 switch.store(true, Ordering::Release);
-                                on.store(false, Ordering::Release);
+                                let mut run = on_lock.lock().unwrap();
+                                *run = false;
                             }
                             EventType::FallingEdge => {
                                 switch.store(true, Ordering::Release);
-                                on.store(true, Ordering::Release);
                                 direction.store(false, Ordering::Release);
+                                let mut run = on_lock.lock().unwrap();
+                                *run = true;
+                                on_cvar.notify_one();
                             }
                         }
                     }
@@ -253,19 +257,22 @@ impl Component for StepperMotor {
                         match evt_type {
                             EventType::RisingEdge => {;
                                 switch.store(true, Ordering::Release);
-                                on.store(false, Ordering::Release);
+                                let mut run = on_lock.lock().unwrap();
+                                *run = false;
                             }
                             EventType::FallingEdge => {
                                 switch.store(true, Ordering::Release);
-                                on.store(true, Ordering::Release);
                                 direction.store(true, Ordering::Release);
+                                let mut run = on_lock.lock().unwrap();
+                                *run = true;
+                                on_cvar.notify_one();
                             }
                         }
                     }
                 }
                 let state = Self::State { //perhaps hard code instead of atomic operation for state
                     switch: switch.load(Ordering::Acquire), //false
-                    on: on.load(Ordering::Acquire), //true?
+                    on: on_lock.lock().unwrap(), //true?
                     direction: direction.load(Ordering::Acquire), //refer to line 151
                 };
                 let message = Any {
@@ -283,8 +290,15 @@ impl Component for StepperMotor {
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         self.switch.store(state.switch, Ordering::Release);
-        self.on.store(state.on, Ordering::Release);
         self.direction.store(state.direction, Ordering::Release);
+        let (on_lock, on_cvar) = &*self.on_paired;
+        let mut run = on_lock.lock().unwrap();
+        if state.on {
+            *run = true;
+            on_cvar.notify_one();
+        } else {
+            *run = false;
+        }
 
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
@@ -307,9 +321,11 @@ impl Component for StepperMotor {
     }
 
     fn get_state(&self) -> Self::State {
+        let (on_lock, on_cvar) = &*self.on_paired;
+
         Self::State {
             switch: self.switch.load(Ordering::Acquire),
-            on: self.on.load(Ordering::Acquire),
+            on: on_lock.lock().unwrap(),
             direction: self.direction.load(Ordering::Acquire)
         }
     }
