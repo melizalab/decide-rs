@@ -251,7 +251,7 @@ impl Component for StepperMotor {
                         let evt_type = event.map_err(|e| DecideError::Component { source: e.into() })
                                             .unwrap().event_type();
                         match evt_type {
-                            EventType::RisingEdge => {;
+                            EventType::RisingEdge => {
                                 switch.store(true, Ordering::Release);
                                 on.store(false, Ordering::Release);
                             }

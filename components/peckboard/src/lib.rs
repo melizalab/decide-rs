@@ -2,7 +2,7 @@ use gpio_cdev::{Chip, AsyncLineEventHandle,
                 LineRequestFlags,
                 MultiLineHandle,
                 EventRequestFlags,
-                errors::Error as GpioError
+                //errors::Error as GpioError
 };
 use futures::stream::StreamExt;
 use tokio::sync::mpsc::Sender;
