@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}, Mutex, Condvar, mpsc as std_mpsc};
 use std::thread;
 use std::time::Instant;
@@ -7,7 +8,7 @@ use futures::{//pin_mut, Stream,
               StreamExt};
 use futures::executor::block_on;
 use gpio_cdev::{AsyncLineEventHandle, Chip,
-                Error as GpioError, EventRequestFlags,
+                EventRequestFlags,
                 EventType,
                 LineRequestFlags,
                 MultiLineHandle};
@@ -152,8 +153,7 @@ impl Component for StepperMotor {
 
                 let (on_lock, on_cvar) = &*on_paired;
                 //wait until on signaled as set to True
-                let _on_guard = on_cvar.wait_while(on_lock.lock().unwrap(), |running| {!*running })
-                    .map_err(|e| DecideError::Component {source: e.into()}).unwrap();
+                let _on_guard = on_cvar.wait_while(on_lock.lock().unwrap(), |running| {!*running }).unwrap();
 
                 let cape_pressed = switch.load(Ordering::Acquire);
                 if cape_pressed {
@@ -161,7 +161,7 @@ impl Component for StepperMotor {
                     'motor_switch: loop {
                         step = StepperMotor::run_motor(step, &motor_1_handle, &motor_3_handle,
                                                        direction.load(Ordering::Acquire));
-                        if !on_lock.lock().unwrap() {
+                        if !on_lock.lock().unwrap().deref() {
                             StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
                             break 'motor_switch
                         }
@@ -177,7 +177,7 @@ impl Component for StepperMotor {
                     };
                     tracing::debug!("Stopping motor after timeout");
                     //Reset to rest
-                    let running = on_lock.lock().unwrap();
+                    let mut running = on_lock.lock().unwrap();
                     *running = false;
                     //leave Switch on false until flipped by cape press
 
@@ -185,7 +185,7 @@ impl Component for StepperMotor {
                     tracing::debug!("Sending motor timeout signal");
                     let state = Self::State {
                         switch: switch.load(Ordering::Acquire), //false
-                        on: on_lock.lock().unwrap(), //true?
+                        on: *on_lock.lock().unwrap().deref(), //true?
                         direction: direction.load(Ordering::Acquire), //refer to line 151
                     };
                     block_on(motor_thread_sender
@@ -272,7 +272,7 @@ impl Component for StepperMotor {
                 }
                 let state = Self::State { //perhaps hard code instead of atomic operation for state
                     switch: switch.load(Ordering::Acquire), //false
-                    on: on_lock.lock().unwrap(), //true?
+                    on: *on_lock.lock().unwrap().deref(), //true?
                     direction: direction.load(Ordering::Acquire), //refer to line 151
                 };
                 let message = Any {
@@ -321,11 +321,11 @@ impl Component for StepperMotor {
     }
 
     fn get_state(&self) -> Self::State {
-        let (on_lock, on_cvar) = &*self.on_paired;
+        let (on_lock, _on_cvar) = &*self.on_paired;
 
         Self::State {
             switch: self.switch.load(Ordering::Acquire),
-            on: on_lock.lock().unwrap(),
+            on: *on_lock.lock().unwrap().deref(),
             direction: self.direction.load(Ordering::Acquire)
         }
     }
