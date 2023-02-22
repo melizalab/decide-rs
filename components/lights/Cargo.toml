@@ -10,7 +10,7 @@ edition = "2018"
 decide-protocol = { path = "../../decide-protocol" }
 prost = "0.9"
 tokio = { version = "1.12", features = ["full"] }
-prost-types = "0.9"
+prost-types = "0.11.1"
 async-trait = "0.1.51"
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1.29"
