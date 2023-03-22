@@ -14,7 +14,7 @@ All are disabled by default.
 */
 use anyhow::Context as AnyhowContext;
 use decide_protocol::{
-    error::{ClientError, ControllerError, DecideError},
+    error::{ClientError, ControllerError},
     proto, ComponentName,
     ComponentRequest::{self, *},
     GeneralRequest::{self, *},

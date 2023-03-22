@@ -1,10 +1,10 @@
 syntax = "proto3";
 
 message State {
-  bool switch = 1;
-  bool light_override = 2;
-  bool ephemera = 3;
-  int32 brightness = 4;
+  bool manual = 1;
+  bool ephemera = 2;
+  int32 brightness = 3;
+  bool daytime = 4;
 }
 
 message Params {

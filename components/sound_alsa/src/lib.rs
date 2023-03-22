@@ -3,10 +3,9 @@ use std::ffi::OsString;
 use std::fs::read_dir;
 use std::ops::Deref;
 use std::path::Path;
-use std::sync::{Arc, Mutex, Condvar, atomic, mpsc as std_mpsc};
+use std::sync::{Arc, Mutex, Condvar, mpsc as std_mpsc};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
-use std::time::Duration;
 
 use alsa::{Direction, pcm::{Access, Format, HwParams, PCM, State},
            ValueOr};
@@ -15,7 +14,7 @@ use audrey::read::BufFileReader;
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
-use tokio::{self, sync::mpsc::{self, Sender}};
+use tokio::{self, sync::mpsc::Sender};
 
 use decide_protocol::{Component,
                       error::{DecideError}
@@ -168,7 +167,7 @@ impl Component for AlsaPlayback {
                                 pcm.drop()
                                     .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                                 let duration = prost_types::Duration::try_from(timer.elapsed())
-                                    .map_err(|e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                                    .map_err(|_e| println!("Could not convert protobuf duration to std duration")).unwrap();
                                 *elapsed = Some(duration.clone());
 
                                 //Send info about interrupted stim
@@ -195,7 +194,7 @@ impl Component for AlsaPlayback {
                                 pcm.drop()
                                     .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                                 let duration = prost_types::Duration::try_from(timer.elapsed())
-                                    .map_err(|e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                                    .map_err(|_e| println!("Could not convert protobuf duration to std duration")).unwrap();
                                 *elapsed = Some(duration.clone());
 
                                 //Send info about interrupted stim
@@ -223,7 +222,7 @@ impl Component for AlsaPlayback {
                     }
                     //playback finished without interruption:
                     let duration = prost_types::Duration::try_from(timer.elapsed())
-                        .map_err(|e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                        .map_err(|_e| println!("Could not convert protobuf duration to std duration")).unwrap();
                     *elapsed = Some(duration.clone());
                     //Send info about completed stim
                     let state = Self::State {
@@ -262,7 +261,7 @@ impl Component for AlsaPlayback {
                 match current_pb {
                     PlayBack::Playing => {tracing::error!("Requested stim while already playing. Send next or stop first.")}
                     PlayBack::Stopped => {
-                        *audio_id = state.audio_id.clone();
+                        *audio_id = state.audio_id;
                         let mut playback = pb_lock.lock().unwrap();
                         *playback = PlayBack::Playing;
                         pb_cnd.notify_one();
@@ -348,7 +347,7 @@ impl Component for AlsaPlayback {
         let import_switch = self.import_switch.clone();
         let queue_lock = self.playback_queue.lock().unwrap();
         let queue = match queue_lock.deref() {
-            Some(_T) => {self.playback_queue.clone()},
+            Some(_t) => {self.playback_queue.clone()},
             None => {
                 let mut queue_lock2 = self.playback_queue.lock().unwrap();
                 *queue_lock2 = Option::from(HashMap::new());

@@ -1,11 +1,9 @@
-use std::path::PathBuf;
 use super::ComponentName;
 use prost::DecodeError;
 use serde_value::DeserializerError;
 use serde_yaml::Error as YamlError;
 use thiserror::Error;
 use tokio::sync::oneshot;
-use gpio_cdev::Error as GpioError;
 
 #[derive(Error, Debug)]
 pub enum DecideError {

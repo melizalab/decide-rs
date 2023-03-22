@@ -5,10 +5,12 @@ lights:
 house-light:
   driver: HouseLight
   config:
-    device_path: /sys/class/leds/starboard::lights/brightness
+    device_path: /sys/class/pwm/pwmchip7/pwm1/duty_cycle
+    lat: 38.03 
+    lon: -78.51
     fake_dawn: 7
     fake_dusk: 19
-    max_brightness: 255
+    period: 500000
 stepper-motor:
   driver: StepperMotor
   config:
