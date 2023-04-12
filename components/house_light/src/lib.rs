@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, Ordering}};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -36,7 +37,7 @@ impl Component for HouseLight {
     type Params = proto::Params;
     type Config = Config;
     const STATE_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
-    const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
+    const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_params";
 
     fn new(config: Self::Config, state_sender: Sender<Any>) -> Self {
         HouseLight {
@@ -53,8 +54,7 @@ impl Component for HouseLight {
     }
 
     async fn init(&mut self, config: Self::Config) {
-        let dev_path = fs::canonicalize(config.device_path.clone()).unwrap();
-        self.write_loc = Some(config.device_path);
+        self.write_loc = Some(config.device_path.clone());
 
         let dawn = config.fake_dawn;
         let dusk = config.fake_dusk;
@@ -70,57 +70,60 @@ impl Component for HouseLight {
         let period = config.period;
 
         self.task_handle = Some(tokio::spawn(async move{
-            if manual.load(Ordering::Acquire) {
-                let new_brightness = brightness.load(Ordering::Acquire);
-                let dt = new_brightness > 0;
-                daytime.store(dt, Ordering::Release);
-                let duty = HouseLight::get_duty(period, new_brightness);
-                fs::write(dev_path, duty)
-                    .expect("Unable to write brightness");
-                tracing::debug!("Brightness written to file");
+            let dev_path = config.device_path.clone();
+            loop {
+                if manual.load(Ordering::Acquire) {
+                    let new_brightness = brightness.load(Ordering::Acquire);
+                    let dt = new_brightness > 0;
+                    daytime.store(dt, Ordering::Release);
+                    let duty = HouseLight::get_duty(period, new_brightness);
+                    let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
+                    fs::write(path, duty).expect("Unable to write brightness");
+                    tracing::debug!("Brightness {:?} written to file", new_brightness);
 
-                let state = Self::State {
-                    manual: false,
-                    ephemera: false,
-                    brightness: new_brightness as i32,
-                    daytime: dt
-                };
-                let message = Any {
-                    value: state.encode_to_vec(),
-                    type_url: Self::STATE_TYPE_URL.into(),
-                };
-                sender.send(message).await
-                    .map_err(|e| DecideError::Component { source: e.into() })
-                    .unwrap();
-            } else {
+                    let state = Self::State {
+                        manual: false,
+                        ephemera: false,
+                        brightness: new_brightness as i32,
+                        daytime: dt
+                    };
+                    let message = Any {
+                        value: state.encode_to_vec(),
+                        type_url: Self::STATE_TYPE_URL.into(),
+                    };
+                    sender.send(message).await
+                        .map_err(|e| DecideError::Component { source: e.into() })
+                        .unwrap();
+                } else {
 
-                let e  = ephemera.load(Ordering::Relaxed);
-                let altitude = HouseLight::calc_altitude(e, dawn, dusk, lat, lon);
-                let new_brightness = HouseLight::calc_brightness(altitude, 100);
-                let dt = new_brightness > 0;
-                daytime.store(dt, Ordering::Release);
+                    let e  = ephemera.load(Ordering::Relaxed);
+                    let altitude = HouseLight::calc_altitude(e, dawn, dusk, lat, lon);
+                    let new_brightness = HouseLight::calc_brightness(altitude, 100);
+                    let dt = new_brightness > 0;
+                    daytime.store(dt, Ordering::Release);
 
-                let duty = HouseLight::get_duty(period, new_brightness);
-                fs::write(dev_path, duty)
-                    .expect("Unable to write brightness");
-                tracing::debug!("Brightness written to file");
-                brightness.store(new_brightness, Ordering::Relaxed);
+                    let duty = HouseLight::get_duty(period, new_brightness);
+                    let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
+                    fs::write(path, duty).expect("Unable to write brightness");
+                    tracing::debug!("Brightness {:?} written to file", new_brightness);
+                    brightness.store(new_brightness, Ordering::Relaxed);
 
-                let state = Self::State {
-                    manual: false,
-                    ephemera: e,
-                    brightness: new_brightness as i32,
-                    daytime: dt
-                };
-                let message = Any {
-                    value: state.encode_to_vec(),
-                    type_url: Self::STATE_TYPE_URL.into(),
-                };
-                sender.send(message).await
-                    .map_err(|e| DecideError::Component { source: e.into() })
-                    .unwrap();
+                    let state = Self::State {
+                        manual: false,
+                        ephemera: e,
+                        brightness: new_brightness as i32,
+                        daytime: dt
+                    };
+                    let message = Any {
+                        value: state.encode_to_vec(),
+                        type_url: Self::STATE_TYPE_URL.into(),
+                    };
+                    sender.send(message).await
+                        .map_err(|e| DecideError::Component { source: e.into() })
+                        .unwrap();
+                }
+                sleep(Duration::from_secs(interval)).await;
             }
-            sleep(Duration::from_secs(interval)).await;
         }));
     }
 
@@ -138,7 +141,7 @@ impl Component for HouseLight {
             let duty = HouseLight::get_duty(self.period, new_brightness);
             fs::write(path, duty)
                 .expect("Unable to write brightness");
-            tracing::debug!("Brightness written to file in manual mode");
+            tracing::debug!("Brightness {:?} written to file in manual mode", new_brightness);
         }
 
         tokio::spawn(async move {
