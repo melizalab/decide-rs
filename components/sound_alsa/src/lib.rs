@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::read_dir;
-use std::ops::Deref;
 use std::path::Path;
-use std::sync::{Arc, Mutex, Condvar, mpsc as std_mpsc};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
-
+use atomic_wait::{wait, wake_all};
 use alsa::{Direction, pcm::{Access, Format, HwParams, PCM, State},
            ValueOr};
 use async_trait::async_trait;
@@ -20,65 +19,60 @@ use decide_protocol::{Component,
                       error::{DecideError}
 };
 use futures::executor::block_on;
-use proto::state::PlayBack;
+use proto::sa_state::PlayBack;
 
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/_.rs"));
-}
-#[derive(Deserialize)]
-pub struct Config {
-    audio_device: String,
-    sample_rate: u32,
-    channel: u32,
-}
+
 pub struct AlsaPlayback {
     audio_dir: Arc<Mutex<String>>,
     audio_id: Arc<Mutex<String>>,
     audio_count: Arc<AtomicU32>,
-    channel: Arc<AtomicBool>,
-    playback: Arc<(Mutex<PlayBack>, Condvar)>, //pause or resume
+    channels: bool,
+    playback: Arc<AtomicU32>, //pause or resume
     elapsed: Arc<Mutex<Option<prost_types::Duration>>>,
-    playback_queue: Arc<Mutex<Option<HashMap<OsString, Vec<i16>>>>>,
+    playback_queue: Arc<Mutex<HashMap<OsString, Vec<i16>>>>,
     state_sender: Sender<Any>,
-    import_switch: Arc<(Mutex<bool>, Condvar)>,
+    import_switch: Arc<AtomicU32>,
     shutdown: Option<(thread::JoinHandle<()>,std_mpsc::Sender<bool>)>,
 }
 
 #[async_trait]
 impl Component for AlsaPlayback {
-    type State = proto::State;
-    type Params = proto::Params;
+    type State = proto::SaState;
+    type Params = proto::SaParams;
     type Config = Config;
-    const STATE_TYPE_URL: &'static str = "melizalab.org/proto/sound_alsa_state";
-    const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/sound_alsa_params";
+    const STATE_TYPE_URL: &'static str = "sa_state";
+    const PARAMS_TYPE_URL: &'static str = "sa_params";
 
     fn new(_config: Self::Config, state_sender: Sender<Any>) -> Self {
+
         AlsaPlayback{
             audio_id: Arc::new(Mutex::new(String::from("None"))),
             audio_dir: Arc::new(Mutex::new(String::from("None"))),
             audio_count: Arc::new(AtomicU32::new(0)),
-            channel: Arc::new(AtomicBool::new(false)), //mono
-            playback: Arc::new((Mutex::new(PlayBack::Stopped), Condvar::new())),
-            playback_queue: Arc::new(Mutex::new(None)),
+            channels: false, //mono
+            playback: Arc::new(AtomicU32::new(0)), //0: Stopped, 1: Playing, 2: Next
+            playback_queue: Arc::new(Mutex::new(HashMap::new())),
             elapsed: Arc::new(Mutex::new(Some(prost_types::Duration{
                 seconds:0, nanos:0
             }))),
             state_sender,
-            import_switch: Arc::new((Mutex::new(true), Condvar::new())),
+            import_switch: Arc::new(AtomicU32::new(1)),
             shutdown: None,
         }
     }
 
     async fn init(&mut self, config: Self::Config) {
+        // Playback state message
         let audio_id = self.audio_id.clone();
         let playback = self.playback.clone();
         let elapsed = self.elapsed.clone();
+        // Playback thread communication
         let sender = self.state_sender.clone();
         let queue = self.playback_queue.clone();
         let import_switch2 = self.import_switch.clone();
         let (sd_tx, sd_rx) = std_mpsc::channel();
-        let num_channel = &*self.channel;
-        let channels = match config.channel {
+
+        self.channels = match config.channels {
             1 => {false}
             2 => {true}
             _ => {
@@ -86,72 +80,45 @@ impl Component for AlsaPlayback {
                 false
             }
         };
-        num_channel.store(channels, Ordering::Relaxed);
 
         //playback thread
         let handle = thread::spawn( move|| {
-            let pcm = PCM::new(&*config.audio_device, Direction::Playback, false)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            tracing::debug!("AlsaPlayback - Playback Thread created");
 
-            let hwp = HwParams::any(&pcm)
+            let pcm = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            hwp.set_channels(config.channel)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            hwp.set_rate(config.sample_rate, ValueOr::Nearest)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            hwp.set_access(Access::RWInterleaved)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            hwp.set_format(Format::s16())
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            pcm.hw_params(&hwp)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-
-            let swp = pcm.sw_params_current()
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            swp.set_start_threshold(hwp.get_buffer_size().unwrap())
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            pcm.sw_params(&swp)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            let io = pcm.io_i16()
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            tracing::debug!("Completed audio hardware setup");
+            tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
 
             'stim: loop {
-                //shutdown
+                // Check shutdown
                 if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
                     pcm.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                     break};
 
-                //block & await completion of import
-                let (imp_lock, imp_cnd) = &*import_switch2;
-                //as long as the value within imp_lock is true, block the thread and wait
-                let _import_guard = imp_cnd.wait_while(imp_lock.lock().unwrap(),
-                                                       |importing| {*importing}).unwrap();
+                // block & await completion of import - change to 0
+                wait(&import_switch2, 1);
 
-                //playback loop
+                // playback loop
+                tracing::debug!("Sound_alsa - Awaiting playback start");
+                // Block and await playback change to 1
+                wait(&playback, 0);
+
                 let stim = audio_id.lock().unwrap();
-                let (pb_lock, pb_cnd) = &*playback;
-
-                //block and wait until state change resumes playing
-                let _pb_guard = pb_cnd.wait_while(pb_lock.lock().unwrap(),
-                |playing| *playing != PlayBack::Playing).unwrap();
-                //we allow it to pass only if playback is set to Playing, instead of
-                //waiting while playing is Stopped, to prevent a Next from passing through.
-
-                tracing::debug!("Playing");
+                tracing::debug!("Sound_alsa - Starting Playback of {:?}", stim.clone());
                 if stim.ends_with("wav")  {
-                    let queue_lock = queue.lock().unwrap();
-                    let stim_queue = queue_lock.as_ref()
-                        .expect("Empty stim queue.");
+
                     let stim_name = OsString::from(stim.clone());
-                    let mut elapsed = elapsed.lock().unwrap();
-
-                    pcm.hw_params(&hwp)
-                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    tracing::debug!("Ping 1");
+                    let io = get_io(&pcm, &config);
+                    tracing::debug!("Ping 2");
+                    let stim_queue = queue.lock().unwrap();
+                    tracing::debug!("Ping 3");
                     let data = stim_queue.get(&*stim_name).unwrap();
-
-                    io.writei(data).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                    tracing::debug!("Begin playback");
+                    tracing::debug!("Ping 4: {:?}", data.len());
+                    tracing::debug!("Begin writei, state is {:?}", pcm.state());
+                    let written = io.writei(data).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    tracing::debug!("After writei, state is {:?}", pcm.state());
+                    tracing::debug!("After writei, write result is {:?}", written);
                     let timer = std::time::Instant::now();
 
                     //loop while playing
@@ -161,54 +128,43 @@ impl Component for AlsaPlayback {
                             pcm.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                             break 'stim}
                         //check for client half-way interruption:
-                        let p = pb_lock.lock().unwrap().clone();
-                        match p {
-                            PlayBack::Next => { //interrupted and skipped
+                        let pb = playback.load(Ordering::Acquire);
+                        match pb {
+                            2 => { // NEXT, interrupted and skipped
                                 pcm.drop()
                                     .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                                 let duration = prost_types::Duration::try_from(timer.elapsed())
                                     .map_err(|_e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                                let mut elapsed = elapsed.lock().unwrap();
                                 *elapsed = Some(duration.clone());
 
                                 //Send info about interrupted stim
                                 let state = Self::State {
                                     audio_id: stim_name.clone().into_string().unwrap(),
-                                    playback: PlayBack::Stopped as i32,
+                                    playback: pb as i32,
                                     elapsed: Some(duration)
                                 };
-                                let message = Any {
-                                    value: state.encode_to_vec(),
-                                    type_url: Self::STATE_TYPE_URL.into(),
-                                };
-                                block_on(sender.send(message))
-                                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                AlsaPlayback::send_state(&sender, state);
                                 tracing::debug!("Preparing to play next stim, elapsed time recorded");
-
-                                let mut playback = pb_lock.lock().unwrap();
-                                *playback = PlayBack::Playing;
-
+                                playback.store(1, Ordering::Release);
                                 continue 'stim}
 
-                            PlayBack::Stopped => { //interrupted
+                            0 => { // STOPPED - interrupted
 
                                 pcm.drop()
                                     .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                                 let duration = prost_types::Duration::try_from(timer.elapsed())
                                     .map_err(|_e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                                let mut elapsed = elapsed.lock().unwrap();
                                 *elapsed = Some(duration.clone());
 
                                 //Send info about interrupted stim
                                 let state = Self::State {
                                     audio_id: stim_name.clone().into_string().unwrap(),
-                                    playback: PlayBack::Stopped as i32,
+                                    playback: pb as i32,
                                     elapsed: Some(duration)
                                 };
-                                let message = Any {
-                                    value: state.encode_to_vec(),
-                                    type_url: Self::STATE_TYPE_URL.into(),
-                                };
-                                block_on(sender.send(message))
-                                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                AlsaPlayback::send_state(&sender, state);
                                 tracing::debug!("Preparing to play next stim, elapsed time recorded");
 
                                 //not sure if this would be necessary:
@@ -217,12 +173,15 @@ impl Component for AlsaPlayback {
 
                                 continue 'stim}
 
-                            PlayBack::Playing => {continue 'playback}
+                            1 => {continue 'playback}
+
+                            _ => {tracing::error!("Unacceptable value found in playback control variable {:?}", pb)}
                         };
                     }
                     //playback finished without interruption:
                     let duration = prost_types::Duration::try_from(timer.elapsed())
                         .map_err(|_e| println!("Could not convert protobuf duration to std duration")).unwrap();
+                    let mut elapsed = elapsed.lock().unwrap();
                     *elapsed = Some(duration.clone());
                     //Send info about completed stim
                     let state = Self::State {
@@ -230,18 +189,13 @@ impl Component for AlsaPlayback {
                         playback: PlayBack::Stopped as i32,
                         elapsed: Some(duration)
                     };
-                    let message = Any {
-                        value: state.encode_to_vec(),
-                        type_url: Self::STATE_TYPE_URL.into(),
-                    };
-                    block_on(sender.send(message))
-                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    AlsaPlayback::send_state(&sender, state);
                     tracing::debug!("Completed stim without interruption");
-                    let mut playback = pb_lock.lock().unwrap();
-                    *playback = PlayBack::Stopped;
+                    playback.store(0, Ordering::Release);
 
                 } else {
-                    tracing::error!("Playback set to Playing but filename is invalid");
+                    tracing::error!("Playback set to Playing but filename {:?} is invalid", stim);
+                    playback.store(0, Ordering::Release);
                 }
             }
         });
@@ -250,8 +204,7 @@ impl Component for AlsaPlayback {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
-        let (pb_lock, pb_cnd) = &*self.playback;
-        let current_pb = pb_lock.lock().unwrap().clone();
+        let current_pb = self.playback.load(Ordering::Acquire) as i32;
         let mut audio_id = self.audio_id.lock().unwrap();
         //can't change 'elapsed' with change_state()?
 
@@ -259,106 +212,92 @@ impl Component for AlsaPlayback {
         match PlayBack::from_i32(state.playback).expect("Invalid value of received state")  {
             PlayBack::Playing => {
                 match current_pb {
-                    PlayBack::Playing => {tracing::error!("Requested stim while already playing. Send next or stop first.")}
-                    PlayBack::Stopped => {
+                    1 => {tracing::error!("Requested stim while already playing. Send next or stop first.")}
+                    0 => {
                         *audio_id = state.audio_id;
-                        let mut playback = pb_lock.lock().unwrap();
-                        *playback = PlayBack::Playing;
-                        pb_cnd.notify_one();
+                        self.playback.store(1, Ordering::Release);
+                        let pb = self.playback.as_ref();
+                        wake_all(pb);
                         tracing::debug!("Notified playback thread of changing state to Playing");
                     }
-                    PlayBack::Next => {
-                        //tricky: playback thread currently transitioning between a "skip" received
+                    2 => {
+                        // tricky: playback thread currently transitioning between a "skip" received
                         // and the next stim playing, sending a play signal during this time is
-                        //equivalent to sending a play signal during a stim playing. Considered invalid.
+                        // equivalent to sending a play signal during a stim playing. Considered invalid.
                         tracing::error!("Requested stim while already playing. Send next or stop first.")
                     }
+                    _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
                 }
             }
             PlayBack::Stopped => {
                 match current_pb {
-                    PlayBack::Playing => {
-                        let mut playback = pb_lock.lock().unwrap();
-                        *playback = PlayBack::Stopped;
+                    1 => {
+                        self.playback.store(0, Ordering::Release);
                         tracing::debug!("Playback requested interrupt.");
                     }
-                    PlayBack::Stopped => {
+                    0 => {
                         tracing::info!("Playback requested to stop while already stopped.");
                     }
-                    PlayBack::Next => {
-                        //another tricky situation: the next signal could have been sent prior to
-                        //pub change message of playback finishing, but arriving after the actual
-                        //state variable change.
-                        //allow this to stop while playback thread has not necessarily returned in time.
-                        let mut playback = pb_lock.lock().unwrap();
-                        *playback = PlayBack::Stopped;
+                    2 => {
+                        // another tricky situation: the next signal could have been sent prior to
+                        // pub change message of playback finishing, but arriving after the actual
+                        // state variable change.
+                        // allow this to stop while playback thread has not necessarily returned in time.
+                        self.playback.store(0, Ordering::Release);
                         tracing::info!("Playback requested to stop while in interrupt & skip.")
                     }
+                    _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
                 }
             }
             PlayBack::Next => {
                 match current_pb {
                     //interrupt and skip:
-                    PlayBack::Playing => {
+                    1 => {
                         *audio_id = state.audio_id.clone();
-                        let mut playback = pb_lock.lock().unwrap();
-                        *playback = PlayBack::Next;
+                        self.playback.store(2, Ordering::Release);
+                        let pb = self.playback.as_ref();
+                        wake_all(pb);
                     }
-                    PlayBack::Stopped => {
+                    0 => {
                         *audio_id = state.audio_id.clone();
-                        let mut playback = pb_lock.lock().unwrap();
-                        *playback = PlayBack::Playing;
-                        pb_cnd.notify_one();
+                        self.playback.store(1, Ordering::Release);
+                        let pb = self.playback.as_ref();
+                        wake_all(pb);
                         tracing::info!("Playback requested to advance while stopped.")
                     }
-                    PlayBack::Next => {
+                    2 => {
                         tracing::error!("Playback requested to interrupt & skip while in interrupt & skip.")
                     }
+                    _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
+
                 }
             }
         };
         //we do not send actual state change PUB messages in change_state(), since it's more important
         //that PUB msgs come from the playback thread
-
-        /*let sender = self.state_sender.clone();
-        tokio::spawn(async move {
-            sender
-                .send(Any {
-                    type_url: String::from(Self::STATE_TYPE_URL),
-                    value: state.encode_to_vec(),
-                })
-                .await
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
-            tracing::debug!("Sound_Alsa state changed");
-        });*/
         Ok(())
     }
 
     fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
-
-        //stop playback when params are changed:
-        let (pb_lock, _pb_cvar) = &*self.playback;
-        let mut playing = pb_lock.lock().unwrap();
-        *playing = PlayBack::Stopped;
+        tracing::debug!("Setting parameters of AlsaPlayback");
+        //stop playback & initiate import when params are changed:
+        self.playback.store(0, Ordering::Release);
+        self.import_switch.store(1, Ordering::Release);
 
         //import
-        let current_dir = self.audio_dir.lock().unwrap();
+        let current_dir: String = self.audio_dir.lock().unwrap().drain(..).collect();
         let import_switch = self.import_switch.clone();
-        let queue_lock = self.playback_queue.lock().unwrap();
-        let queue = match queue_lock.deref() {
-            Some(_t) => {self.playback_queue.clone()},
-            None => {
-                let mut queue_lock2 = self.playback_queue.lock().unwrap();
-                *queue_lock2 = Option::from(HashMap::new());
-                self.playback_queue.clone()
-            }
-        };
+        let queue = self.playback_queue.clone();
 
-        if params.audio_dir != current_dir.as_ref() {
+        tracing::debug!("Checking current playback dir to match requested {:?}", current_dir.clone());
+        tracing::debug!("Requested dir change to {:?}", params.audio_dir);
+
+        if params.audio_dir != current_dir {
+            tracing::debug!("ping 1");
             let mut audio_dir = self.audio_dir.lock().unwrap();
             *audio_dir = params.audio_dir;
-            import_audio(import_switch, queue, self.channel.clone(),
+            tracing::debug!("Init import audio");
+            import_audio(import_switch, queue, self.channels,
                          self.audio_dir.clone(),self.audio_count.clone())
         };
         tracing::debug!("Sound playback parameters changed");
@@ -366,10 +305,9 @@ impl Component for AlsaPlayback {
     }
 
     fn get_state(&self) -> Self::State {
-        let (pb_lock, _pb_cvar) = &*self.playback;
         Self::State {
             audio_id: self.audio_id.try_lock().unwrap().clone(),
-            playback: *pb_lock.try_lock().unwrap() as i32,
+            playback: self.playback.load(Ordering::Acquire) as i32,
             elapsed: self.elapsed.try_lock().unwrap().clone(),
         }
     }
@@ -390,6 +328,39 @@ impl Component for AlsaPlayback {
                 .unwrap()
         }
     }
+}
+
+impl AlsaPlayback{
+    fn send_state(sender: &Sender<Any>, state: proto::SaState) {
+        let message = Any {
+            value: state.encode_to_vec(),
+            type_url: Self::STATE_TYPE_URL.into(),
+        };
+        block_on(sender.send(message))
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        tracing::debug!("AlsaPlayback - state sent");
+    }
+}
+
+
+fn get_io<'a>(pcm: &'a PCM, config: &'a Config) -> alsa::pcm::IO<'a, i16> {
+
+    let hwp = HwParams::any(&pcm)
+        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    hwp.set_channels(config.channels)
+        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    hwp.set_rate(config.sample_rate, ValueOr::Nearest)
+        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    hwp.set_access(Access::RWInterleaved)
+        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    hwp.set_format(Format::s16())
+        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    pcm.hw_params(&hwp)
+        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    let io = pcm.io_i16()
+        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    tracing::debug!("Completed audio hardware setup");
+    return io
 }
 
 fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) -> Vec<i16>{
@@ -424,12 +395,13 @@ fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) ->
     result
 }
 
-fn import_audio(switch: Arc<(Mutex<bool>, Condvar)>,
-                queue: Arc<Mutex<Option<HashMap<OsString, Vec<i16>>>>>,
-                channels: Arc<AtomicBool>,
+fn import_audio(switch: Arc<AtomicU32>,
+                queue: Arc<Mutex<HashMap<OsString, Vec<i16>>>>,
+                channels: bool,
                 audio_dir: Arc<Mutex<String>>,
                 audio_count: Arc<AtomicU32>) {
     tokio::spawn(async move {
+        tracing::debug!("Creating task to import audio");
         let dir = audio_dir.lock().unwrap();
         let mut reader = read_dir(Path::new(&*dir))
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
@@ -448,11 +420,9 @@ fn import_audio(switch: Arc<(Mutex<bool>, Condvar)>,
                     .map_err(|e|DecideError::Component { source: e.into() })
                     .unwrap());
 
-                let mut queue_lock = queue.lock()
+                let mut stim_queue = queue.lock()
                     .map_err(|_e| tracing::error!("Couldn't acquire lock on playlist"))
                     .unwrap();
-                let stim_queue = queue_lock.as_mut()
-                    .expect("None value found in stim queue hashmap");
 
                 //avoid duplicates
                 if !stim_queue.contains_key(&fname) {
@@ -461,13 +431,13 @@ fn import_audio(switch: Arc<(Mutex<bool>, Condvar)>,
                         let wav = audrey::open(path)
                             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                         let wav_channels = wav.description().channel_count();
-                        let hw_channels = match channels.load(Ordering::Acquire) {
-                            true => {1}
-                            false => {2}
+                        let hw_channels = match channels {
+                            true => {2}
+                            false => {1}
                         };
+                        tracing::debug!("Importing file {:?}", fname);
                         let audio = process_audio(wav, wav_channels, hw_channels);
                         stim_queue.insert(fname.clone(),audio);
-                        tracing::debug!("Importing file {:?}", fname);
                     }
                 }
                 entry = reader.next();
@@ -475,14 +445,22 @@ fn import_audio(switch: Arc<(Mutex<bool>, Condvar)>,
         } else {tracing::info!("Current audio directory is empty!")}
         tracing::info!("Finished importing audio files");
         //add number of stims:
-        let length = queue.lock().unwrap().as_ref()
-            .expect("Non-existent queue right after import??")
+        let length = queue.lock().unwrap()
             .keys().len() as u32;
         audio_count.store(length, Ordering::Relaxed);
         //ref line 117
-        let (imp_lock, imp_cnd) = &*switch;
-        let mut importing = imp_lock.lock().unwrap();
-        *importing = false;
-        imp_cnd.notify_one();
+        switch.store(0,Ordering::Release);
+        let sw = switch.as_ref();
+        wake_all(sw);
     });
+}
+
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/_.rs"));
+}
+#[derive(Deserialize)]
+pub struct Config {
+    audio_device: String,
+    sample_rate: u32,
+    channels: u32,
 }

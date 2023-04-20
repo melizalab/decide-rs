@@ -33,11 +33,11 @@ pub struct HouseLight {
 
 #[async_trait]
 impl Component for HouseLight {
-    type State = proto::State;
-    type Params = proto::Params;
+    type State = proto::HlState;
+    type Params = proto::HlParams;
     type Config = Config;
-    const STATE_TYPE_URL: &'static str = "melizalab.org/proto/house_light_state";
-    const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/house_light_params";
+    const STATE_TYPE_URL: &'static str = "hl_state";
+    const PARAMS_TYPE_URL: &'static str = "hl_params";
 
     fn new(config: Self::Config, state_sender: Sender<Any>) -> Self {
         HouseLight {

@@ -1,12 +1,12 @@
 syntax = "proto3";
 
-message State {
+message HlState {
   bool manual = 1;
   bool ephemera = 2;
   int32 brightness = 3;
   bool daytime = 4;
 }
 
-message Params {
+message HlParams {
   int64 clock_interval = 1;
 }

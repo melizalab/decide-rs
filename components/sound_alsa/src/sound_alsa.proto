@@ -1,7 +1,7 @@
 syntax = "proto3";
 import "google/protobuf/duration.proto";
 
-message State {
+message SaState {
   string audio_id = 1;
   enum PlayBack {
     STOPPED = 0;
@@ -12,7 +12,7 @@ message State {
   google.protobuf.Duration elapsed = 3;
 }
 
-message Params {
+message SaParams {
   string audio_dir = 1;
   uint32 audio_count = 2;
 }

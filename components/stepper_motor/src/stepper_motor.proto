@@ -1,11 +1,10 @@
 syntax = "proto3";
 
-message State {
-  bool switch = 1;
-  bool on = 2;
+message SmState {
+  bool running = 2;
   bool direction = 3;
 }
 
-message Params {
+message SmParams {
   uint64 timeout = 1;
 }

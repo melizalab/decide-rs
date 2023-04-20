@@ -22,9 +22,6 @@ use tokio::{
     self, sync::mpsc, task::JoinHandle
 };
 
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/_.rs"));
-}
 
 pub struct PeckLeds {
     handles: MultiLineHandle,
@@ -45,8 +42,8 @@ impl Component for PeckLeds {
     type State = proto::LedState;
     type Params = proto::LedParams;
     type Config = LedConfig;
-    const STATE_TYPE_URL: &'static str = "melizalab.org/proto/led_state";
-    const PARAMS_TYPE_URL: &'static str =  "melizalab.org/proto/led_params";
+    const STATE_TYPE_URL: &'static str = "led_state";
+    const PARAMS_TYPE_URL: &'static str =  "led_params";
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
         let mut chip4 = Chip::new(config.peckboard_chip.clone())
@@ -251,6 +248,10 @@ pub struct KeyConfig {
     peckboard_chip: String,
     key_offsets: Vec<u32>,
     ir_offsets: Vec<u32>,
+}
+
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
 
 #[derive(Clone, Copy, Debug)]
