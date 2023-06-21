@@ -132,9 +132,8 @@ impl Component for HouseLight {
 
         self.manual.store(state.manual, Ordering::Relaxed);
         self.ephemera.store(state.ephemera, Ordering::Relaxed);
-        self.brightness.store(state.brightness as u8, Ordering::Relaxed);
 
-        // Change brightness immediately if overriding
+        // Change brightness immediately
         if state.manual {
             let path = self.write_loc.clone().unwrap();
             let new_brightness = state.brightness as u8;
@@ -142,6 +141,20 @@ impl Component for HouseLight {
             fs::write(path, duty)
                 .expect("Unable to write brightness");
             tracing::debug!("Brightness {:?} written to file in manual mode", new_brightness);
+            self.brightness.store(new_brightness, Ordering::Relaxed);
+
+        } else {
+            let e  = ephemera.load(Ordering::Relaxed);
+            let altitude = HouseLight::calc_altitude(e, dawn, dusk, lat, lon);
+            let new_brightness = HouseLight::calc_brightness(altitude, 100);
+            let dt = new_brightness > 0;
+            self.daytime.store(dt, Ordering::Release);
+
+            let duty = HouseLight::get_duty(period, new_brightness);
+            let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
+            fs::write(path, duty).expect("Unable to write brightness");
+            tracing::debug!("Brightness {:?} written to file", new_brightness);
+            self.brightness.store(new_brightness, Ordering::Relaxed);
         }
 
         tokio::spawn(async move {
