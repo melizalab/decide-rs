@@ -2,6 +2,7 @@ use gpio_cdev::{Chip, AsyncLineEventHandle,
                 LineRequestFlags,
                 MultiLineHandle,
                 EventRequestFlags,
+                EventType
                 //errors::Error as GpioError
 };
 use futures::stream::StreamExt;
@@ -42,8 +43,8 @@ impl Component for PeckLeds {
     type State = proto::LedState;
     type Params = proto::LedParams;
     type Config = LedConfig;
-    const STATE_TYPE_URL: &'static str = "led_state";
-    const PARAMS_TYPE_URL: &'static str =  "led_params";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/LedState";
+    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
         let mut chip4 = Chip::new(config.peckboard_chip.clone())
@@ -121,8 +122,8 @@ impl Component for PeckKeys {
     type State = proto::KeyState;
     type Params = proto::KeyParams;
     type Config = KeyConfig;
-    const STATE_TYPE_URL: &'static str = "melizalab.org/proto/key_state";
-    const PARAMS_TYPE_URL: &'static str = "melizalab.org/proto/key_params";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/KeyState";
+    const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/KeyParams";
 
     fn new(_config: Self::Config, sender: Sender<Any>) -> Self {
         PeckKeys {
@@ -144,8 +145,8 @@ impl Component for PeckKeys {
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let mut interrupt = AsyncLineEventHandle::new(interrupt_offset.events(
                 LineRequestFlags::INPUT,
-                EventRequestFlags::BOTH_EDGES,
-                "Peckboard Interrupt"
+                EventRequestFlags::BOTH_EDGES, // RISING_EDGE results in lines being 0
+                "Peckboard_Interrupt"
             ).unwrap())
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
@@ -163,25 +164,25 @@ impl Component for PeckKeys {
 
             loop {
                 match interrupt.next().await {
-                    Some(_event) => {
-                        //match event.unwrap().event_type() {
-                        //    EventType::FallingEdge => {}
-                        //    EventType::RisingEdge => {}
-                        //} no need to match if state is updated with any event
-                        tracing::debug!("PeckKey Interrupted - Event Registered");
-                        let values = key_handles.get_values()
-                            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                        let state = Self::State {
-                            peck_left: values[0] != 0, //
-                            peck_center: values[1] != 0,
-                            peck_right: values[2] != 0,
-                        };
-                        let message = Any {
-                            value: state.encode_to_vec(),
-                            type_url: Self::STATE_TYPE_URL.into(),
-                        };
-                        sender.send(message).await
-                            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    Some(event) => {
+                        match event.unwrap().event_type() {
+                            EventType::FallingEdge => {
+                                tracing::debug!("PeckKey Interrupted - Event Registered");
+                                let values = key_handles.get_values()
+                                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                let state = Self::State {
+                                    peck_left: values[0] != 0, //
+                                    peck_center: values[1] != 0,
+                                    peck_right: values[2] != 0,
+                                };
+                                let message = Any {
+                                    value: state.encode_to_vec(),
+                                    type_url: Self::STATE_TYPE_URL.into(),
+                                };
+                                sender.send(message).await
+                                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();}
+                            EventType::RisingEdge => { continue }
+                        }
                     }
                     None => {tracing::error!("PeckKey Interrupted - No Event Registered");continue},
                 }

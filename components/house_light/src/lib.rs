@@ -25,8 +25,7 @@ pub struct HouseLight {
     brightness: Arc<AtomicU8>,
     daytime: Arc<AtomicBool>,
     interval: u64,
-    period: u32,
-    write_loc: Option<String>,
+    config: Config,
     state_sender: Sender<Any>,
     task_handle: Option<JoinHandle<()>>,
 }
@@ -36,8 +35,8 @@ impl Component for HouseLight {
     type State = proto::HlState;
     type Params = proto::HlParams;
     type Config = Config;
-    const STATE_TYPE_URL: &'static str = "hl_state";
-    const PARAMS_TYPE_URL: &'static str = "hl_params";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/HlState";
+    const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/HlParams";
 
     fn new(config: Self::Config, state_sender: Sender<Any>) -> Self {
         HouseLight {
@@ -46,45 +45,38 @@ impl Component for HouseLight {
             brightness: Arc::new(AtomicU8::new(0)),
             daytime: Arc::new(AtomicBool::new(false)),
             interval: 300,
-            period: config.period,
-            write_loc: None,
+            config: config,
             state_sender,
             task_handle: None,
         }
     }
 
     async fn init(&mut self, config: Self::Config) {
-        self.write_loc = Some(config.device_path.clone());
-
-        let dawn = config.fake_dawn;
-        let dusk = config.fake_dusk;
-        let lat = config.lat;
-        let lon = config.lon;
 
         let manual = self.manual.clone();
-        let ephemera = self.ephemera.clone();
+        let eph = self.ephemera.clone();
         let brightness = self.brightness.clone();
         let daytime = self.daytime.clone();
         let interval = self.interval;
         let sender = self.state_sender.clone();
-        let period = config.period;
+        //let period = config.period;
 
-        self.task_handle = Some(tokio::spawn(async move{
+        self.task_handle = Some(tokio::spawn(async move {
             let dev_path = config.device_path.clone();
             loop {
                 if manual.load(Ordering::Acquire) {
-                    let new_brightness = brightness.load(Ordering::Acquire);
-                    let dt = new_brightness > 0;
-                    daytime.store(dt, Ordering::Release);
-                    let duty = HouseLight::get_duty(period, new_brightness);
-                    let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
-                    fs::write(path, duty).expect("Unable to write brightness");
-                    tracing::debug!("Brightness {:?} written to file", new_brightness);
+                    let bt = brightness.load(Ordering::Acquire);
+                    let dt = bt > 0;
+                    //daytime.store(dt, Ordering::Release);
+                    //let duty = HouseLight::get_duty(period, new_brightness);
+                    //let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
+                    //fs::write(path, new_brightness).expect("Unable to write brightness");
+                    tracing::debug!("Currently in manual mode, no need to adjust brightness");
 
                     let state = Self::State {
-                        manual: false,
+                        manual: true,
                         ephemera: false,
-                        brightness: new_brightness as i32,
+                        brightness: bt as i32,
                         daytime: dt
                     };
                     let message = Any {
@@ -96,15 +88,19 @@ impl Component for HouseLight {
                         .unwrap();
                 } else {
 
-                    let e  = ephemera.load(Ordering::Relaxed);
-                    let altitude = HouseLight::calc_altitude(e, dawn, dusk, lat, lon);
-                    let new_brightness = HouseLight::calc_brightness(altitude, 100);
+                    let e  = eph.load(Ordering::Relaxed);
+                    let altitude = HouseLight::calc_altitude(e,
+                                                             config.fake_dawn,
+                                                             config.fake_dusk,
+                                                             config.lat,
+                                                             config.lon);
+                    let new_brightness = HouseLight::calc_brightness(altitude, config.max_brightness);
                     let dt = new_brightness > 0;
                     daytime.store(dt, Ordering::Release);
 
-                    let duty = HouseLight::get_duty(period, new_brightness);
+                    //let duty = HouseLight::get_duty(period, new_brightness);
                     let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
-                    fs::write(path, duty).expect("Unable to write brightness");
+                    fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
                     tracing::debug!("Brightness {:?} written to file", new_brightness);
                     brightness.store(new_brightness, Ordering::Relaxed);
 
@@ -129,30 +125,33 @@ impl Component for HouseLight {
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         let sender = self.state_sender.clone();
-
+        let dev_path = self.config.device_path.clone();
         self.manual.store(state.manual, Ordering::Relaxed);
         self.ephemera.store(state.ephemera, Ordering::Relaxed);
 
         // Change brightness immediately
         if state.manual {
-            let path = self.write_loc.clone().unwrap();
             let new_brightness = state.brightness as u8;
-            let duty = HouseLight::get_duty(self.period, new_brightness);
-            fs::write(path, duty)
+            //let duty = HouseLight::get_duty(self.period, new_brightness);
+            fs::write(dev_path, new_brightness.to_string())
                 .expect("Unable to write brightness");
             tracing::debug!("Brightness {:?} written to file in manual mode", new_brightness);
             self.brightness.store(new_brightness, Ordering::Relaxed);
 
         } else {
-            let e  = ephemera.load(Ordering::Relaxed);
-            let altitude = HouseLight::calc_altitude(e, dawn, dusk, lat, lon);
-            let new_brightness = HouseLight::calc_brightness(altitude, 100);
+            let e  = self.ephemera.load(Ordering::Relaxed);
+            let altitude = HouseLight::calc_altitude(e,
+                                                     self.config.fake_dawn,
+                                                     self.config.fake_dusk,
+                                                     self.config.lat,
+                                                     self.config.lon);
+            let new_brightness = HouseLight::calc_brightness(altitude, self.config.max_brightness);
             let dt = new_brightness > 0;
             self.daytime.store(dt, Ordering::Release);
 
-            let duty = HouseLight::get_duty(period, new_brightness);
+            //let duty = HouseLight::get_duty(period, new_brightness);
             let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
-            fs::write(path, duty).expect("Unable to write brightness");
+            fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
             tracing::debug!("Brightness {:?} written to file", new_brightness);
             self.brightness.store(new_brightness, Ordering::Relaxed);
         }
@@ -203,9 +202,10 @@ impl Component for HouseLight {
 }
 
 impl HouseLight {
-    fn get_duty(period: u32, brightness: u8) -> String {
-        (period * (brightness as u32)/100).to_string()
-    }
+    //fn get_duty(period: u32, brightness: u8) -> String {
+    //    (period * (brightness as u32)/100).to_string()
+    //}
+
     fn calc_brightness(altitude: f64, max_brightness: u8) -> u8 {
         let x = (altitude.sin() * (max_brightness as f64)).round() as u8;
         //let brightness = max(0.0, x); //trait 'Ord' is not implemented for '{float}'
@@ -227,10 +227,11 @@ impl HouseLight {
 
 #[derive(Deserialize)]
 pub struct Config {
-    device_path: String, // /sys/class/pwm/pwmchip7/pwm1/duty_cycle
+    device_path: String, // /sys/class/leds/starboard::lights/brightness
     fake_dawn: f64,
     fake_dusk: f64,
     lat: f64,
     lon: f64,
-    period: u32,
+    //period: u32,
+    max_brightness: u8 //255
 }

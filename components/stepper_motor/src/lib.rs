@@ -28,8 +28,8 @@ impl Component for StepperMotor {
     type State = proto::SmState;
     type Params = proto::SmParams;
     type Config = Config;
-    const STATE_TYPE_URL: &'static str = "sm_state";
-    const PARAMS_TYPE_URL: &'static str = "sm_params";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/SmState";
+    const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/SmParams";
 
     fn new(_config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
         StepperMotor {
@@ -107,9 +107,17 @@ impl Component for StepperMotor {
         self.direction.store(state.direction, Ordering::Release);
         self.running.store(state.running, Ordering::Release);
 
+        let notify = self.req_sender.clone();
         if state.running {
-            self.req_sender.as_ref().unwrap().blocking_send([state.running, state.direction]).unwrap();
-        };
+            tokio::spawn(async move {
+                notify
+                    .unwrap()
+                    .send([state.running, state.direction])
+                    .await
+                    .map_err(|e| DecideError::Component { source: e.into() })
+                    .unwrap();
+            });
+        }
         Ok(())
     }
 

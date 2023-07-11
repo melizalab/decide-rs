@@ -9,10 +9,11 @@ message SaState {
     NEXT = 2;
   }
   PlayBack playback = 2;
-  google.protobuf.Duration elapsed = 3;
+  uint32 frame_count = 3;
 }
 
 message SaParams {
   string audio_dir = 1;
   uint32 audio_count = 2;
+  uint32 sample_rate = 3;
 }
