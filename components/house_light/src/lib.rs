@@ -4,7 +4,6 @@ use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, Ordering}};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use chrono::{self, DateTime, Timelike, Utc};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
@@ -21,7 +20,7 @@ pub mod proto {
 
 pub struct HouseLight {
     manual: Arc<AtomicBool>, // true if manual input of brightness
-    ephemera: Arc<AtomicBool>, // true if lights governed by sun position at lat/lon
+    dyson: Arc<AtomicBool>, // true if lights governed by sun position at lat/lon
     brightness: Arc<AtomicU8>,
     daytime: Arc<AtomicBool>,
     interval: u64,
@@ -41,7 +40,7 @@ impl Component for HouseLight {
     fn new(config: Self::Config, state_sender: Sender<Any>) -> Self {
         HouseLight {
             manual: Arc::new(AtomicBool::new(false)),
-            ephemera: Arc::new(AtomicBool::new(true)),
+            dyson: Arc::new(AtomicBool::new(true)),
             brightness: Arc::new(AtomicU8::new(0)),
             daytime: Arc::new(AtomicBool::new(false)),
             interval: 300,
@@ -54,7 +53,7 @@ impl Component for HouseLight {
     async fn init(&mut self, config: Self::Config) {
 
         let manual = self.manual.clone();
-        let eph = self.ephemera.clone();
+        let fake_sun = self.dyson.clone();
         let brightness = self.brightness.clone();
         let daytime = self.daytime.clone();
         let interval = self.interval;
@@ -88,8 +87,8 @@ impl Component for HouseLight {
                         .unwrap();
                 } else {
 
-                    let e  = eph.load(Ordering::Relaxed);
-                    let altitude = HouseLight::calc_altitude(e,
+                    let dyson  = fake_sun.load(Ordering::Relaxed);
+                    let altitude = HouseLight::calc_altitude(dyson,
                                                              config.fake_dawn,
                                                              config.fake_dusk,
                                                              config.lat,
@@ -127,7 +126,7 @@ impl Component for HouseLight {
         let sender = self.state_sender.clone();
         let dev_path = self.config.device_path.clone();
         self.manual.store(state.manual, Ordering::Relaxed);
-        self.ephemera.store(state.ephemera, Ordering::Relaxed);
+        self.dyson.store(state.dyson, Ordering::Relaxed);
 
         // Change brightness immediately
         if state.manual {
@@ -139,8 +138,8 @@ impl Component for HouseLight {
             self.brightness.store(new_brightness, Ordering::Relaxed);
 
         } else {
-            let e  = self.ephemera.load(Ordering::Relaxed);
-            let altitude = HouseLight::calc_altitude(e,
+            let d  = self.dyson.load(Ordering::Relaxed);
+            let altitude = HouseLight::calc_altitude(d,
                                                      self.config.fake_dawn,
                                                      self.config.fake_dusk,
                                                      self.config.lat,
@@ -179,7 +178,7 @@ impl Component for HouseLight {
     fn get_state(&self) -> Self::State {
         Self::State {
             manual: self.manual.load(Ordering::Relaxed),
-            ephemera: self.ephemera.load(Ordering::Relaxed),
+            dyson: self.dyson.load(Ordering::Relaxed),
             brightness: self.brightness.load(Ordering::Relaxed) as i32,
             daytime: self.daytime.load(Ordering::Relaxed),
         }
@@ -211,12 +210,12 @@ impl HouseLight {
         //let brightness = max(0.0, x); //trait 'Ord' is not implemented for '{float}'
         if x > 0 { x } else { 0 }
     }
-    fn calc_altitude(ephemera: bool, dawn: f64, dusk: f64, lat: f64, lon: f64) -> f64 {
-        if !ephemera {
-            let now: DateTime<Utc> = DateTime::from(SystemTime::now());
+    fn calc_altitude(dyson: bool, dawn: f64, dusk: f64, lat: f64, lon: f64) -> f64 {
+        if dyson {
+            let now = chrono::offset::Local::now();
             let now = (now.hour() + (now.minute() / 60) + (now.second() / 3600)) as f64;
             let x: f64 = (now + 24.0 - dawn) % 24.0;
-            let y: f64 = (dusk + 24.0 - now) % 24.0;
+            let y: f64 = (dusk + 24.0 - dawn) % 24.0;
             (x / y) * std::f64::consts::PI
         } else {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();

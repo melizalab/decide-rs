@@ -2,7 +2,7 @@ syntax = "proto3";
 
 message HlState {
   bool manual = 1;
-  bool ephemera = 2;
+  bool dyson = 2;
   int32 brightness = 3;
   bool daytime = 4;
 }
