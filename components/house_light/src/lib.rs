@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, Ordering}};
 use std::time::{SystemTime, UNIX_EPOCH};
-
+use chrono::prelude::*;
 use async_trait::async_trait;
 use prost::Message;
 use prost_types::Any;
@@ -74,7 +74,7 @@ impl Component for HouseLight {
 
                     let state = Self::State {
                         manual: true,
-                        ephemera: false,
+                        dyson: false,
                         brightness: bt as i32,
                         daytime: dt
                     };
@@ -105,7 +105,7 @@ impl Component for HouseLight {
 
                     let state = Self::State {
                         manual: false,
-                        ephemera: e,
+                        dyson: dyson,
                         brightness: new_brightness as i32,
                         daytime: dt
                     };
