@@ -19,6 +19,8 @@ docker build -t decide-rs/image:tag ./
 cross build --target armv7-unknown-linux-gnueabihf --release
 ```
 
+### logging
+Logging level defautls to DEBUG, but can be overwritten with `export DECIDE_LOG="value"`
 
 ## running tests
 

@@ -23,7 +23,6 @@ use tokio::{
     self, sync::mpsc, task::JoinHandle
 };
 
-
 pub struct PeckLeds {
     handles: MultiLineHandle,
     led_state: LedColor,
@@ -47,6 +46,19 @@ impl Component for PeckLeds {
     const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
+        use std::fs;
+        use std::path::{Path, PathBuf};
+        use std::time::Duration;
+        use std::thread;
+
+        if !Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists() {
+            let sysfs_chip = fs::canonicalize(
+                PathBuf::from("/sys/class/i2c-adapter/i2c-1/new_device")).unwrap();
+            fs::write(sysfs_chip, "pcf8575 0x20").expect("Unable to write to i2c-adapter for peckboard");
+            tracing::debug!("Peckboard chip initiated");
+            assert!(Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists());
+        }
+        thread::sleep(Duration::from_secs(2));
         let mut chip4 = Chip::new(config.peckboard_chip.clone())
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
         let handles = chip4.get_lines(&config.led_offsets.clone())
@@ -145,9 +157,9 @@ impl Component for PeckKeys {
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             let mut interrupt = AsyncLineEventHandle::new(interrupt_offset.events(
                 LineRequestFlags::INPUT,
-                EventRequestFlags::BOTH_EDGES, // RISING_EDGE results in lines being 0
-                "Peckboard_Interrupt"
-            ).unwrap())
+                EventRequestFlags::BOTH_EDGES, // we're interested in capturing FALLING_EDGE
+                "Peckboard_Interrupt"          // but oddly setting flags to FALLING_EDGE still
+            ).unwrap())                         // gives us both edges.
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
             let mut chip4 = Chip::new(config.peckboard_chip.clone())
@@ -167,20 +179,26 @@ impl Component for PeckKeys {
                     Some(event) => {
                         match event.unwrap().event_type() {
                             EventType::FallingEdge => {
-                                tracing::debug!("PeckKey Interrupted - Event Registered");
                                 let values = key_handles.get_values()
                                     .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                                let state = Self::State {
-                                    peck_left: values[0] != 0, //
-                                    peck_center: values[1] != 0,
-                                    peck_right: values[2] != 0,
-                                };
-                                let message = Any {
-                                    value: state.encode_to_vec(),
-                                    type_url: Self::STATE_TYPE_URL.into(),
-                                };
-                                sender.send(message).await
-                                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();}
+                                let first = values[0];
+                                if values.iter().all(|&i| i == first) {
+                                    continue
+                                } else {
+                                    tracing::debug!("PeckKey Interrupted - Event {:?} Registered", values);
+                                    let state = Self::State {
+                                        peck_left: values[2] != 0,
+                                        peck_center: values[1] != 0,
+                                        peck_right: values[0] != 0,
+                                    };
+                                    let message = Any {
+                                        value: state.encode_to_vec(),
+                                        type_url: Self::STATE_TYPE_URL.into(),
+                                    };
+                                    sender.send(message).await
+                                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                }
+                            }
                             EventType::RisingEdge => { continue }
                         }
                     }
@@ -279,8 +297,8 @@ impl LedColor {
     fn as_value(&self) -> [u8; 3] {
         match self {
             LedColor::Off => {[0,0,0]}
-            LedColor::Red => {[1,0,0]}
-            LedColor::Blue => {[0,1,0]}
+            LedColor::Blue => {[1,0,0]}
+            LedColor::Red => {[0,1,0]}
             LedColor::Green => {[0,0,1]}
             LedColor::White => {[1,1,1]}
         }

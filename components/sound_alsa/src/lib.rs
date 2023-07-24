@@ -19,7 +19,7 @@ use decide_protocol::{Component,
                       error::{DecideError}
 };
 use futures::executor::block_on;
-use proto::sa_state::PlayBack;
+//use proto::sa_state::PlayBack;
 
 
 pub struct AlsaPlayback {
@@ -89,6 +89,7 @@ impl Component for AlsaPlayback {
             let pcm = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
+            let hwm = get_hw_config(&pcm, &config);
 
             'stim: loop {
                 // Check shutdown
@@ -104,10 +105,15 @@ impl Component for AlsaPlayback {
                 // Block and await playback change to 1
                 wait(&playback, 0);
 
+                pcm.hw_params(&hwm)
+                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                let io = pcm.io_i16()
+                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                tracing::debug!("IO acquired");
+
                 let stim = audio_id.lock().unwrap();
                 tracing::debug!("Sound_alsa - Starting Playback of {:?}", stim.clone());
                 let stim_name = OsString::from(stim.clone());
-                let io = get_io(&pcm, &config);
                 let stim_queue = queue.lock().unwrap();
                 let data = stim_queue.get(&*stim_name).unwrap();
 
@@ -118,7 +124,7 @@ impl Component for AlsaPlayback {
 
                 let state = Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
-                    playback: PlayBack::Playing as i32,
+                    playback: 1,
                     frame_count
                 };
                 AlsaPlayback::send_state(&sender, state);
@@ -139,7 +145,7 @@ impl Component for AlsaPlayback {
                             //Send info about interrupted stim
                             let state = Self::State {
                                 audio_id: stim_name.clone().into_string().unwrap(),
-                                playback: pb as i32,
+                                playback: pb as u32,
                                 frame_count
                             };
                             AlsaPlayback::send_state(&sender, state);
@@ -155,7 +161,7 @@ impl Component for AlsaPlayback {
                             //Send info about interrupted stim
                             let state = Self::State {
                                 audio_id: stim_name.clone().into_string().unwrap(),
-                                playback: pb as i32,
+                                playback: pb as u32,
                                 frame_count,
                             };
                             AlsaPlayback::send_state(&sender, state);
@@ -175,13 +181,13 @@ impl Component for AlsaPlayback {
                 // playback finished without interruption. Send info about completed stim
                 let state = Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
-                    playback: PlayBack::Stopped as i32,
+                    playback: 0 as u32,
                     frame_count
                 };
                 AlsaPlayback::send_state(&sender, state);
                 tracing::debug!("Completed stim without interruption");
                 playback.store(0, Ordering::Release);
-
+                pcm.drop().unwrap()
             }
         });
 
@@ -193,8 +199,8 @@ impl Component for AlsaPlayback {
         let mut audio_id = self.audio_id.lock().unwrap();
 
         //compare sent playback control signal against current control
-        match PlayBack::from_i32(state.playback).expect("Invalid value of received state")  {
-            PlayBack::Playing => {
+        match state.playback  {
+            1 => {
                 match current_pb {
                     1 => {tracing::error!("Requested stim while already playing. Send next or stop first.")}
                     0 => {
@@ -213,7 +219,7 @@ impl Component for AlsaPlayback {
                     _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
                 }
             }
-            PlayBack::Stopped => {
+            0 => {
                 match current_pb {
                     1 => {
                         self.playback.store(0, Ordering::Release);
@@ -233,7 +239,7 @@ impl Component for AlsaPlayback {
                     _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
                 }
             }
-            PlayBack::Next => {
+            2 => {
                 match current_pb {
                     //interrupt and skip:
                     1 => {
@@ -256,6 +262,7 @@ impl Component for AlsaPlayback {
 
                 }
             }
+            _ => {tracing::error!("Unacceptable value found in playback control variable {:?}", state.playback)}
         };
         //we do not send actual state change PUB messages in change_state(), since it's more important
         //that PUB msgs come from the playback thread
@@ -289,7 +296,7 @@ impl Component for AlsaPlayback {
     fn get_state(&self) -> Self::State {
         Self::State {
             audio_id: self.audio_id.lock().unwrap().clone(),
-            playback: self.playback.load(Ordering::Acquire) as i32,
+            playback: self.playback.load(Ordering::Acquire),
             frame_count: self.frames.load(Ordering::Acquire),
         }
     }
@@ -326,7 +333,7 @@ impl AlsaPlayback{
 }
 
 
-fn get_io<'a>(pcm: &'a PCM, config: &'a Config) -> alsa::pcm::IO<'a, i16> {
+fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> HwParams<'a>{
 
     let hwp = HwParams::any(&pcm)
         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
@@ -338,12 +345,7 @@ fn get_io<'a>(pcm: &'a PCM, config: &'a Config) -> alsa::pcm::IO<'a, i16> {
         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     hwp.set_format(Format::s16())
         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    pcm.hw_params(&hwp)
-        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    let io = pcm.io_i16()
-        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    tracing::debug!("Completed audio hardware setup");
-    return io
+    return hwp
 }
 
 fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) -> (Vec<i16>,u32){

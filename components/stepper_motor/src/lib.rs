@@ -32,6 +32,40 @@ impl Component for StepperMotor {
     const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/SmParams";
 
     fn new(_config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self {
+        use std::fs;
+        use std::path::Path;
+
+        if Path::new("/sys/class/pwm/pwmchip5").exists() {
+            if !Path::new("/sys/class/pwm/pwmchip5/pwm0").exists() {
+                fs::write("/sys/class/pwm/pwmchip5/export", "0").expect("Unable to export pwmchip5/pwm0");
+            }
+            if !Path::new("/sys/class/pwm/pwmchip5/pwm1").exists() {
+                fs::write("/sys/class/pwm/pwmchip5/export", "1").expect("Unable to export pwmchip5/pwm1");
+            }
+            fs::write("/sys/class/pwm/pwmchip5/pwm0/period", "10000").expect("Unable to write to pwm0 period");
+            fs::write("/sys/class/pwm/pwmchip5/pwm1/period", "10000").expect("Unable to write to pwm1 period");
+            fs::write("/sys/class/pwm/pwmchip5/pwm0/duty_cycle", "6500").expect("Unable to write to pwm0 duty_cycle");
+            fs::write("/sys/class/pwm/pwmchip5/pwm1/duty_cycle", "6500").expect("Unable to write to pwm1 duty_cycle");
+            fs::write("/sys/class/pwm/pwmchip5/pwm0/enable", "1").expect("Unable to write to pwm0 enable");
+            fs::write("/sys/class/pwm/pwmchip5/pwm1/enable", "1").expect("Unable to write to pwm1 enable");
+        } else if Path::new("/sys/class/pwm/pwmchip0").exists() {
+            if !Path::new("/sys/class/pwm/pwmchip0/pwm0").exists() {
+                fs::write("/sys/class/pwm/pwmchip0/export", "0").expect("Unable to export pwmchip0/pwm0");
+            }
+            if !Path::new("/sys/class/pwm/pwmchip0/pwm1").exists() {
+                fs::write("/sys/class/pwm/pwmchip0/export", "1").expect("Unable to export pwmchip0/pwm1");
+            }
+            fs::write("/sys/class/pwm/pwmchip0/pwm0/period", "10000").expect("Unable to write to pwm0 period");
+            fs::write("/sys/class/pwm/pwmchip0/pwm1/period", "10000").expect("Unable to write to pwm1 period");
+            fs::write("/sys/class/pwm/pwmchip0/pwm0/duty_cycle", "6500").expect("Unable to write to pwm0 duty_cycle");
+            fs::write("/sys/class/pwm/pwmchip0/pwm1/duty_cycle", "6500").expect("Unable to write to pwm1 duty_cycle");
+            fs::write("/sys/class/pwm/pwmchip0/pwm0/enable", "1").expect("Unable to write to pwm0 enable");
+            fs::write("/sys/class/pwm/pwmchip0/pwm1/enable", "1").expect("Unable to write to pwm1 enable");
+        } else {
+            tracing::error!("Found neither pwmchip0 nor pwmchip5 for stepper motor");
+            panic!("stepper motor pwmchip not found :(")
+        }
+
         StepperMotor {
             running: Arc::new(AtomicBool::new(false)),
             direction: Arc::new(AtomicBool::new(true)),
