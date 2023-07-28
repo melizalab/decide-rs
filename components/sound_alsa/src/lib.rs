@@ -339,8 +339,8 @@ fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> HwParams<'a>{
         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     hwp.set_channels(config.channels)
         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    hwp.set_rate(config.sample_rate, ValueOr::Nearest)
-        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    // hwp.set_rate(config.sample_rate, ValueOr::Nearest)
+    //     .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     hwp.set_access(Access::RWInterleaved)
         .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     hwp.set_format(Format::s16())
