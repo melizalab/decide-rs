@@ -33,7 +33,7 @@ pub struct AlsaPlayback {
     playback_queue: Arc<Mutex<HashMap<OsString, (Vec<i16>, u32)>>>,
     state_sender: Sender<Any>,
     import_switch: Arc<AtomicU32>,
-    shutdown: Option<(thread::JoinHandle<()>,std_mpsc::Sender<bool>)>,
+    shutdown: Option<(tokio::task::JoinHandle<()>,std_mpsc::Sender<bool>)>,
 }
 
 #[async_trait]
@@ -83,13 +83,21 @@ impl Component for AlsaPlayback {
         self.sample_rate.store(config.sample_rate, Ordering::Release);
 
         //playback thread
-        let handle = thread::spawn( move|| {
+        let handle = tokio::spawn(async move {
             tracing::debug!("AlsaPlayback - Playback Thread created");
 
-            let pcm = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
+            let audio_dev = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
-            let hwm = get_hw_config(&pcm, &config);
+            let hwm = get_hw_config(&audio_dev, &config);
+            audio_dev.hw_params(&hwm)
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            let mut mmap = audio_dev.direct_mmap_playback::<i16>();
+            let mut io = if mmap.is_err() {
+                Some(audio_dev.io_i16()
+                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap())
+            } else {None};
+            tracing::debug!("IO acquired");
 
             'stim: loop {
                 // Check shutdown
@@ -105,27 +113,25 @@ impl Component for AlsaPlayback {
                 // Block and await playback change to 1
                 wait(&playback, 0);
 
-                pcm.hw_params(&hwm)
-                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                let io = pcm.io_i16()
-                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                tracing::debug!("IO acquired");
-
                 let stim = audio_id.lock().unwrap();
                 tracing::debug!("Sound_alsa - Starting Playback of {:?}", stim.clone());
                 let stim_name = OsString::from(stim.clone());
                 let stim_queue = queue.lock().unwrap();
-                let data = stim_queue.get(&*stim_name).unwrap();
+                let mut data = stim_queue.get(&*stim_name).unwrap().clone();
 
                 let frame_count = data.1;
                 frames.store(frame_count, Ordering::Release);
 
-                let _written = io.writei(&data.0).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                if let Ok(ref mut mmap) = mmap {
+                    if !AlsaPlayback::playback_direct(&audio_dev, mmap, &mut data.0).unwrap() {continue 'stim}
+                } else if let Some(ref mut io) = io {
+                    if !AlsaPlayback::playback_io(&audio_dev, io, &mut data.0).unwrap() {continue 'stim}
+                };
 
                 let state = Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
                     playback: 1,
-                    frame_count
+                    frame_count: frame_count.clone()
                 };
                 AlsaPlayback::send_state(&sender, state);
 
@@ -146,7 +152,7 @@ impl Component for AlsaPlayback {
                             let state = Self::State {
                                 audio_id: stim_name.clone().into_string().unwrap(),
                                 playback: pb as u32,
-                                frame_count
+                                frame_count: frame_count.clone()
                             };
                             AlsaPlayback::send_state(&sender, state);
                             tracing::debug!("Preparing to play next stim.");
@@ -162,7 +168,7 @@ impl Component for AlsaPlayback {
                             let state = Self::State {
                                 audio_id: stim_name.clone().into_string().unwrap(),
                                 playback: pb as u32,
-                                frame_count,
+                                frame_count: frame_count.clone()
                             };
                             AlsaPlayback::send_state(&sender, state);
                             tracing::debug!("Preparing to play next stim.");
@@ -182,7 +188,7 @@ impl Component for AlsaPlayback {
                 let state = Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
                     playback: 0 as u32,
-                    frame_count
+                    frame_count: frame_count.clone()
                 };
                 AlsaPlayback::send_state(&sender, state);
                 tracing::debug!("Completed stim without interruption");
@@ -312,10 +318,7 @@ impl Component for AlsaPlayback {
     async fn shutdown(&mut self) {
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
-            handle.join()
-                //disable mapping here due to multiple errors
-                //.map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap()
+            handle.abort();
         }
     }
 }
@@ -329,6 +332,58 @@ impl AlsaPlayback{
         block_on(sender.send(message))
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
         tracing::debug!("AlsaPlayback - state sent");
+    }
+    fn playback_direct(p: &alsa::PCM, mmap: &mut alsa::direct::pcm::MmapPlayback<i16>, data: &mut Vec<i16>) -> Ok(bool) {
+        tracing::debug!("Direct Playback Initiating");
+        if mmap.avail() > 0 {
+            mmap.write(data)
+        }
+        match mmap.status().state() {
+            State::Running => { Ok(true) }, // All fine
+            State::Prepared => {
+                tracing::debug!("Starting audio output stream");
+                p.start().unwrap();
+                Ok(true)
+            },
+            State::XRun => {
+                tracing::error!("Underrun in audio output stream!");
+                p.prepare().unwrap();
+                Ok(false)
+            },
+            State::Suspended => {
+                tracing::debug!("Resuming audio output stream");
+                p.resume().unwrap();
+                Ok(false)
+            },
+            n @ _ => Err(tracing::error!("Unexpected pcm state {:?}", n))}
+    }
+    fn playback_io(p: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &mut Vec<i16>) -> Ok(bool) {
+        let avail = match p.avail_update() {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("Audio-playback recovering from {}", e);
+                p.recover(e.errno() as std::os::raw::c_int, true)?;
+                p.avail_update().unwrap()
+            }
+        } as usize;
+        if avail > 0 {
+            io.writei(data).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        }
+        match p.state() {
+            State::Running => Ok(true), // All fine
+            State::Prepared => { println!("Starting audio output stream"); p.start().unwrap(); Ok(true) },
+            State::XRun => {
+                tracing::error!("Underrun in audio output stream!");
+                p.prepare().unwrap();
+                Ok(false)
+            },
+            State::Suspended => {
+                tracing::debug!("Resuming audio output stream");
+                p.prepare().unwrap();
+                Ok(false)
+            },
+            n @ _ => Err(tracing::error!("Unexpected pcm state {:?}", n))?,
+        }
     }
 }
 
