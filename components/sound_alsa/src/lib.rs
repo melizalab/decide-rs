@@ -6,8 +6,7 @@ use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use atomic_wait::{wait, wake_all};
-use alsa::{Direction, pcm::{Access, Format, HwParams, PCM, State},
-           ValueOr};
+use alsa::{Direction, pcm::{Access, Format, HwParams, PCM, State}};
 use async_trait::async_trait;
 use audrey::read::BufFileReader;
 use prost::Message;
@@ -92,17 +91,15 @@ impl Component for AlsaPlayback {
             let hwm = get_hw_config(&audio_dev, &config);
             audio_dev.hw_params(&hwm)
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            let mut mmap = audio_dev.direct_mmap_playback::<i16>();
-            let mut io = if mmap.is_err() {
-                Some(audio_dev.io_i16()
-                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap())
-            } else {None};
+            // let mut mmap = audio_dev.direct_mmap_playback::<i16>();
+            let mut io = audio_dev.io_i16()
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             tracing::debug!("IO acquired");
 
             'stim: loop {
                 // Check shutdown
                 if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
-                    pcm.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    audio_dev.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                     break};
 
                 // block & await completion of import - change to 0
@@ -122,11 +119,9 @@ impl Component for AlsaPlayback {
                 let frame_count = data.1;
                 frames.store(frame_count, Ordering::Release);
 
-                if let Ok(ref mut mmap) = mmap {
-                    if !AlsaPlayback::playback_direct(&audio_dev, mmap, &mut data.0).unwrap() {continue 'stim}
-                } else if let Some(ref mut io) = io {
-                    if !AlsaPlayback::playback_io(&audio_dev, io, &mut data.0).unwrap() {continue 'stim}
-                };
+                if !AlsaPlayback::playback_io(&audio_dev, &mut io, &mut data.0).unwrap() {
+                    continue 'stim
+                }
 
                 let state = Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
@@ -136,16 +131,16 @@ impl Component for AlsaPlayback {
                 AlsaPlayback::send_state(&sender, state);
 
                 //loop while playing
-                'playback: while pcm.state() == State::Running {
+                'playback: while audio_dev.state() == State::Running {
                     //shutdown check
                     if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
-                        pcm.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                        audio_dev.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                         break 'stim}
                     //check for client half-way interruption:
                     let pb = playback.load(Ordering::Acquire);
                     match pb {
                         2 => { // NEXT, interrupted and skipped
-                            pcm.drop()
+                            audio_dev.reset()
                                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
                             //Send info about interrupted stim
@@ -161,7 +156,7 @@ impl Component for AlsaPlayback {
 
                         0 => { // STOPPED - interrupted
 
-                            pcm.drop()
+                            audio_dev.reset()
                                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
                             //Send info about interrupted stim
@@ -184,6 +179,7 @@ impl Component for AlsaPlayback {
                         _ => {tracing::error!("Unacceptable value found in playback control variable {:?}", pb)}
                     };
                 }
+                tracing::debug!("Completed stim without interruption");
                 // playback finished without interruption. Send info about completed stim
                 let state = Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
@@ -191,9 +187,10 @@ impl Component for AlsaPlayback {
                     frame_count: frame_count.clone()
                 };
                 AlsaPlayback::send_state(&sender, state);
-                tracing::debug!("Completed stim without interruption");
                 playback.store(0, Ordering::Release);
-                pcm.drop().unwrap()
+                tracing::debug!("State is {:?}", audio_dev.state());
+                audio_dev.recover().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+
             }
         });
 
@@ -201,9 +198,10 @@ impl Component for AlsaPlayback {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
+        tracing::debug!("In change state function, about to compare");
         let current_pb = self.playback.load(Ordering::Acquire) as i32;
         let mut audio_id = self.audio_id.lock().unwrap();
-
+        tracing::debug!("acquired playback variables");
         //compare sent playback control signal against current control
         match state.playback  {
             1 => {
@@ -333,36 +331,43 @@ impl AlsaPlayback{
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
         tracing::debug!("AlsaPlayback - state sent");
     }
-    fn playback_direct(p: &alsa::PCM, mmap: &mut alsa::direct::pcm::MmapPlayback<i16>, data: &mut Vec<i16>) -> Ok(bool) {
-        tracing::debug!("Direct Playback Initiating");
-        if mmap.avail() > 0 {
-            mmap.write(data)
-        }
-        match mmap.status().state() {
-            State::Running => { Ok(true) }, // All fine
-            State::Prepared => {
-                tracing::debug!("Starting audio output stream");
-                p.start().unwrap();
-                Ok(true)
-            },
-            State::XRun => {
-                tracing::error!("Underrun in audio output stream!");
-                p.prepare().unwrap();
-                Ok(false)
-            },
-            State::Suspended => {
-                tracing::debug!("Resuming audio output stream");
-                p.resume().unwrap();
-                Ok(false)
-            },
-            n @ _ => Err(tracing::error!("Unexpected pcm state {:?}", n))}
-    }
-    fn playback_io(p: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &mut Vec<i16>) -> Ok(bool) {
+    // Absolutely doesn't work for our specific problem:
+    // mmap.write() requires a mut ref iterator that returns the object, not the reference to obj
+    // iterators from vector will only return the reference
+
+    // fn playback_direct(p: &alsa::PCM, mmap: &mut alsa::direct::pcm::MmapPlayback<i16>, data: Vec<i16>)
+    //     -> std::result::Result<bool, String> {
+    //     tracing::debug!("Direct Playback Initiating");
+    //     if mmap.avail() > 0 {
+    //         mmap.write(&mut dat.iter());
+    //     }
+    //     match mmap.status().state() {
+    //         State::Running => { Ok(true) }, // All fine
+    //         State::Prepared => {
+    //             tracing::debug!("Starting audio output stream");
+    //             p.start().unwrap();
+    //             Ok(true)
+    //         },
+    //         State::XRun => {
+    //             tracing::error!("Underrun in audio output stream!");
+    //             p.prepare().unwrap();
+    //             Ok(false)
+    //         },
+    //         State::Suspended => {
+    //             tracing::debug!("Resuming audio output stream");
+    //             p.resume().unwrap();
+    //             Ok(false)
+    //         },
+    //         n @ _ => Err(format!("Unexpected pcm state {:?}", n))
+    //     }
+    // }
+    fn playback_io(p: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &mut Vec<i16>)
+        -> std::result::Result<bool, String> {
         let avail = match p.avail_update() {
             Ok(n) => n,
             Err(e) => {
                 tracing::warn!("Audio-playback recovering from {}", e);
-                p.recover(e.errno() as std::os::raw::c_int, true)?;
+                p.recover(e.errno() as std::os::raw::c_int, true).unwrap();
                 p.avail_update().unwrap()
             }
         } as usize;
@@ -382,25 +387,32 @@ impl AlsaPlayback{
                 p.prepare().unwrap();
                 Ok(false)
             },
-            n @ _ => Err(tracing::error!("Unexpected pcm state {:?}", n))?,
+            n @ _ => Err(format!("Unexpected pcm state {:?}", n)),
         }
     }
 }
 
 
-fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> HwParams<'a>{
+fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> std::result::Result<bool, String>{
 
-    let hwp = HwParams::any(&pcm)
-        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    hwp.set_channels(config.channels)
-        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    // hwp.set_rate(config.sample_rate, ValueOr::Nearest)
-    //     .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    hwp.set_access(Access::RWInterleaved)
-        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    hwp.set_format(Format::s16())
-        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    return hwp
+    let hwp = HwParams::any(&pcm).unwrap();
+    hwp.set_channels(config.channels).unwrap();
+    // hwp.set_rate().unwrap();
+    hwp.set_access(Access::RWInterleaved).unwrap();
+    hwp.set_format(Format::s16()).unwrap();
+    hwp.set_buffer_size(256).unwrap(); // A few ms latency by default
+    hwp.set_period_size(256/4, alsa::ValueOr::Nearest).unwrap();
+
+    pcm.hw_params(&hwp).unwrap();
+
+    let swp = pcm.sw_params_current().unwrap();
+    let hwpc = pcm.hw_params_current().unwrap();
+    let (bufsize, periodsize) = (hwpc.get_buffer_size().unwrap(), hwpc.get_period_size().unwrap());
+    swp.set_start_threshold(bufsize - periodsize).unwrap();
+    sw.set_avail_min(periodsize).unwrap();
+    p.sw_params(&swp).unwrap();
+
+    Ok(true)
 }
 
 fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) -> (Vec<i16>,u32){
