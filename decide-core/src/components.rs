@@ -74,7 +74,6 @@ macro_rules! impl_components {
                         async fn init(&mut self, _config: Self::Config) { }
 
                         fn change_state(&mut self, state: Self::State) -> Result<()> {
-                            trace!("changing state");
                             self.state = state.clone();
                             let sender = self.state_sender.clone();
                             tokio::spawn(async move {
@@ -82,7 +81,6 @@ macro_rules! impl_components {
                                     type_url: String::from(Self::STATE_TYPE_URL),
                                     value: state.encode_to_vec()
                                 }).await.map_err(|e| DecideError::Component{ source: e.into() }).unwrap();
-                                trace!("state changed");
                             });
                             Ok(())
                         }
@@ -107,7 +105,6 @@ macro_rules! impl_components {
 
             impl ComponentKind {
                 pub fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
-                    println!("In component.rs, at decode_n_change_state, matching and requesting.")
                     match self {
                         $(
                             ComponentKind::$component(t) => t.decode_and_change_state(message),

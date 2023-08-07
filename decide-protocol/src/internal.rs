@@ -53,7 +53,6 @@ pub trait Component {
             }
             .into());
         }
-        println!("In decode_n change state, evoking change state");
         self.change_state(
             Self::State::decode(&*message.value).map_err(ClientError::MessageDecodingError)?,
         )
