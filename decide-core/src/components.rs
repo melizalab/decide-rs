@@ -107,6 +107,7 @@ macro_rules! impl_components {
 
             impl ComponentKind {
                 pub fn decode_and_change_state(&mut self, message: Any) -> Result<()> {
+                    println!("In component.rs, at decode_n_change_state, matching and requesting.")
                     match self {
                         $(
                             ComponentKind::$component(t) => t.decode_and_change_state(message),

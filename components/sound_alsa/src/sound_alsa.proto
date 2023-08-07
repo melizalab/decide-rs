@@ -3,7 +3,7 @@ import "google/protobuf/duration.proto";
 
 message SaState {
   string audio_id = 1;
-  uint32 playback = 2;
+  bool playback = 2;
   uint32 frame_count = 3;
 }
 
