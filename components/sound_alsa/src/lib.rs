@@ -238,8 +238,8 @@ impl AlsaPlayback{
     }
     fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, frames: u32, playback: &Arc<AtomicU32>)
         -> std::result::Result<bool, String> {
-
-        let avail = match p.avail_update() {
+        let frames: usize = frames.try_into().unwrap();
+        let avail = match pcm.avail_update() {
             Ok(n) => n,
             Err(e) => {
                 tracing::warn!("Audio-playback failed to call available update, recovering from {}", e);
@@ -247,46 +247,43 @@ impl AlsaPlayback{
                 pcm.avail_update().unwrap()
             }
         } as usize;
+        println!("Available is {:?}", avail);
         assert!(avail > 0);
         let mut pointer = 0;
-        let mut written: u32 = io.writei(data)
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap().into();
-        pointer = written;
+        let mut written: usize = 0;
         //loop while playing
-        'playback: while written < frames {
-            //check for client half-way interruption:
-            let pb = playback.load(Ordering::Acquire);
-            match pb {
-
-                0 => { // STOPPED - interrupted
-
-                    pcm.reset()
-                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                    tracing::debug!("Interrupted!");
-                    break}
-
-                1 => {continue 'playback}
-
-                _ => {tracing::error!("Unacceptable value found in playback control variable {:?}", pb)}
+        while (pointer < frames) & (playback.load(Ordering::Acquire) == 1) {
+            let slice = if pointer+960>frames {&data[pointer..]} else {&data[pointer..pointer+960]};
+            written = match io.writei(slice) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::error!("Recovering from {}", e);
+                    pcm.recover(e.errno() as std::os::raw::c_int, true).unwrap();
+                    0
+                }
             };
+            pointer += written;
+            tracing::debug!("Frames written: {:?}, frames remaining: {:?}", written, frames-pointer);
             match pcm.state() {
-                State::Running => true, // All fine
-                State::Prepared => { println!("Starting audio output stream"); p.start().unwrap();},
+                State::Running => {
+                    tracing::debug!("Running")
+                }, // All fine
+                State::Prepared => {
+                    tracing::debug!("Starting audio output stream");
+                    pcm.start().unwrap();
+                },
                 State::XRun => {
                     tracing::debug!("Underrun in audio output stream!, will call prepare()");
-                    p.prepare().unwrap();
-                    tracing::debug!("Current state is {:?}", p.state());
+                    pcm.prepare().unwrap();
+                    tracing::debug!("Current state is {:?}", pcm.state());
                 },
                 State::Suspended => {
                     tracing::error!("Suspended, will call prepare()");
-                    p.prepare().unwrap();
-                    tracing::debug!("Current state is {:?}", p.state());
+                    pcm.prepare().unwrap();
+                    tracing::debug!("Current state is {:?}", pcm.state());
                 },
-                n @ _ => Err(format!("Unexpected pcm state {:?}", n)),
+                n @ _ => panic!("Unexpected pcm state {:?}", n),
             };
-            written = io.writei(data[&pointer+&written])
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap().into();
-            pointer = written;
         };
         Ok(true)
     }
@@ -300,14 +297,14 @@ fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> std::result::Result<bo
     // hwp.set_rate().unwrap();
     hwp.set_access(Access::RWInterleaved).unwrap();
     hwp.set_format(Format::s16()).unwrap();
-    hwp.set_buffer_size(256).unwrap(); // A few ms latency by default
-    hwp.set_period_size(256/4, alsa::ValueOr::Nearest).unwrap();
-
+    hwp.set_buffer_size(1920).unwrap(); // A few ms latency by default
+    hwp.set_period_size(1920/2, alsa::ValueOr::Nearest).unwrap();
     pcm.hw_params(&hwp).unwrap();
 
     // let swp = pcm.sw_params_current().unwrap();
-    // let hwpc = pcm.hw_params_current().unwrap();
-    // let (bufsize, periodsize) = (hwpc.get_buffer_size().unwrap(), hwpc.get_period_size().unwrap());
+    let hwpc = pcm.hw_params_current().unwrap();
+    let (bufsize, periodsize) = (hwpc.get_buffer_size().unwrap(), hwpc.get_period_size().unwrap());
+    tracing::info!("Buffer size is {:?}. period size is {:?}", bufsize, periodsize);
     // swp.set_start_threshold(bufsize - periodsize).unwrap();
     // sw.set_avail_min(periodsize).unwrap();
     // p.sw_params(&swp).unwrap();
