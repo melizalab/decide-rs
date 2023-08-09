@@ -111,9 +111,8 @@ impl Component for AlsaPlayback {
                 let stim_queue = queue.lock().unwrap();
                 let data = stim_queue.get(&*stim_name).unwrap();
 
-                let frame_count = data.1;
-                frames.store(frame_count, Ordering::Release);
-                let duration: f64 = frame_count as f64 / sample_rate.load(Ordering::Acquire) as f64;
+                let frame_count = data.1.clone();
+                frames.store(frame_count.clone(), Ordering::Release);
 
                 AlsaPlayback::send_state(sender.clone(), Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
@@ -121,40 +120,8 @@ impl Component for AlsaPlayback {
                     frame_count: frame_count.clone()
                 });
 
-                if !AlsaPlayback::playback_io(&audio_dev, &mut io, &data.0).unwrap() {
+                if !AlsaPlayback::playback_io(&audio_dev, &mut io, &data.0, frame_count, &playback).unwrap() {
                     continue 'stim
-                }
-                tracing::info!("Sound_alsa - Starting Playback of {:?}", stim.clone());
-
-                let start = Instant::now();
-                //loop while playing
-                'playback: while start.elapsed().as_secs_f64() < duration {
-                    //shutdown check
-                    if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
-                        audio_dev.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                        break 'stim}
-                    //check for client half-way interruption:
-                    let pb = playback.load(Ordering::Acquire);
-                    match pb {
-
-                        0 => { // STOPPED - interrupted
-
-                            audio_dev.reset()
-                                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-
-                            //Send info about interrupted stim
-                            AlsaPlayback::send_state(sender.clone(), Self::State {
-                                audio_id: stim_name.clone().into_string().unwrap(),
-                                playback: false,
-                                frame_count: frame_count.clone()
-                            });
-                            tracing::debug!("Interrupted!");
-                            continue 'stim}
-
-                        1 => {continue 'playback}
-
-                        _ => {tracing::error!("Unacceptable value found in playback control variable {:?}", pb)}
-                    };
                 }
                 tracing::debug!("Completed stim without interruption");
                 // playback finished without interruption. Send info about completed stim
@@ -269,36 +236,59 @@ impl AlsaPlayback{
             .unwrap();
         tracing::debug!("AlsaPlayback - state sent");
     }
-    fn playback_io(p: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>)
+    fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, frames: u32, playback: &Arc<AtomicU32>)
         -> std::result::Result<bool, String> {
+
         let avail = match p.avail_update() {
             Ok(n) => n,
             Err(e) => {
-                tracing::warn!("Audio-playback recovering from {}", e);
-                p.recover(e.errno() as std::os::raw::c_int, true).unwrap();
-                p.avail_update().unwrap()
+                tracing::warn!("Audio-playback failed to call available update, recovering from {}", e);
+                pcm.recover(e.errno() as std::os::raw::c_int, true).unwrap();
+                pcm.avail_update().unwrap()
             }
         } as usize;
-        if avail > 0 {
-            io.writei(data).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-        }
-        match p.state() {
-            State::Running => Ok(true), // All fine
-            State::Prepared => { println!("Starting audio output stream"); p.start().unwrap(); Ok(true) },
-            State::XRun => {
-                tracing::debug!("Underrun in audio output stream!, will call prepare()");
-                p.prepare().unwrap();
-                tracing::debug!("Current state is {:?}", p.state());
-                Ok(true)
-            },
-            State::Suspended => {
-                tracing::error!("Suspended, will call prepare()");
-                p.prepare().unwrap();
-                tracing::debug!("Current state is {:?}", p.state());
-                Ok(false)
-            },
-            n @ _ => Err(format!("Unexpected pcm state {:?}", n)),
-        }
+        assert!(avail > 0);
+        let mut pointer = 0;
+        let mut written: u32 = io.writei(data)
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap().into();
+        pointer = written;
+        //loop while playing
+        'playback: while written < frames {
+            //check for client half-way interruption:
+            let pb = playback.load(Ordering::Acquire);
+            match pb {
+
+                0 => { // STOPPED - interrupted
+
+                    pcm.reset()
+                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    tracing::debug!("Interrupted!");
+                    break}
+
+                1 => {continue 'playback}
+
+                _ => {tracing::error!("Unacceptable value found in playback control variable {:?}", pb)}
+            };
+            match pcm.state() {
+                State::Running => true, // All fine
+                State::Prepared => { println!("Starting audio output stream"); p.start().unwrap();},
+                State::XRun => {
+                    tracing::debug!("Underrun in audio output stream!, will call prepare()");
+                    p.prepare().unwrap();
+                    tracing::debug!("Current state is {:?}", p.state());
+                },
+                State::Suspended => {
+                    tracing::error!("Suspended, will call prepare()");
+                    p.prepare().unwrap();
+                    tracing::debug!("Current state is {:?}", p.state());
+                },
+                n @ _ => Err(format!("Unexpected pcm state {:?}", n)),
+            };
+            written = io.writei(data[&pointer+&written])
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap().into();
+            pointer = written;
+        };
+        Ok(true)
     }
 }
 
