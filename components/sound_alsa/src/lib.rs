@@ -16,8 +16,6 @@ use tokio::{self, sync::mpsc::Sender as tkSender};
 use decide_protocol::{Component,
                       error::{DecideError}
 };
-use std::time::{Instant};
-
 
 pub struct AlsaPlayback {
     audio_dir: Arc<Mutex<String>>,
@@ -78,7 +76,6 @@ impl Component for AlsaPlayback {
             }
         };
         self.sample_rate.store(config.sample_rate, Ordering::Release);
-        let sample_rate = self.sample_rate.clone();
         //playback thread
         let handle = thread::spawn(move || {
             tracing::debug!("AlsaPlayback - Playback Thread created");
@@ -100,9 +97,8 @@ impl Component for AlsaPlayback {
 
                 // block & await completion of import - change to 0
                 wait(&import_switch2, 1);
-
                 // playback loop
-                tracing::debug!("Sound_alsa - Awaiting playback start");
+                tracing::debug!("Sound_alsa - Awaiting playback request");
                 // Block and await playback change to 1
                 wait(&playback, 0);
 
@@ -119,11 +115,17 @@ impl Component for AlsaPlayback {
                     playback: true,
                     frame_count: frame_count.clone()
                 });
-
+                match audio_dev.prepare() {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::warn!("Audio-playback failed to prepare for playback, recovering from {}", e);
+                        audio_dev.recover(e.errno() as std::os::raw::c_int, true).unwrap();
+                    }
+                }
                 if !AlsaPlayback::playback_io(&audio_dev, &mut io, &data.0, frame_count, &playback).unwrap() {
                     continue 'stim
                 }
-                tracing::debug!("Completed stim without interruption");
+                tracing::debug!("Completed stim!");
                 // playback finished without interruption. Send info about completed stim
                 AlsaPlayback::send_state(sender.clone(), Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
@@ -131,22 +133,21 @@ impl Component for AlsaPlayback {
                     frame_count: frame_count.clone()
                 });
                 playback.store(0, Ordering::Release);
-                audio_dev.prepare().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                audio_dev.drop().unwrap();
             }
         });
-
         self.shutdown = Some((handle, sd_tx));
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         let current_pb = self.playback.load(Ordering::Acquire);
-        let mut audio_id = self.audio_id.lock().unwrap();
         //compare sent playback control signal against current control
         match state.playback  {
             true => {
                 match current_pb {
                     1 => {tracing::error!("Requested stim while already playing. Send next or stop first.")}
                     0 => {
+                        let mut audio_id = self.audio_id.lock().unwrap(); // this will block if playback is underway
                         *audio_id = state.audio_id;
                         self.playback.store(1, Ordering::Release);
                         let pb = self.playback.as_ref();
@@ -247,13 +248,13 @@ impl AlsaPlayback{
                 pcm.avail_update().unwrap()
             }
         } as usize;
-        println!("Available is {:?}", avail);
-        assert!(avail > 0);
+        tracing::debug!("Available buffer for playback is {:?}", avail);
+        // assert!(avail > 0);
         let mut pointer = 0;
         let mut written: usize = 0;
         //loop while playing
-        while (pointer < frames) & (playback.load(Ordering::Acquire) == 1) {
-            let slice = if pointer+960>frames {&data[pointer..]} else {&data[pointer..pointer+960]};
+        while (pointer < frames-1) & (playback.load(Ordering::Acquire) == 1) {
+            let slice = if pointer+512>frames {&data[pointer..]} else {&data[pointer..pointer+512]};
             written = match io.writei(slice) {
                 Ok(n) => n,
                 Err(e) => {
@@ -263,24 +264,24 @@ impl AlsaPlayback{
                 }
             };
             pointer += written;
-            tracing::debug!("Frames written: {:?}, frames remaining: {:?}", written, frames-pointer);
+            // tracing::debug!("Frames written: {:?}, frames remaining: {:?}", written, frames-pointer);
             match pcm.state() {
                 State::Running => {
-                    tracing::debug!("Running")
+                    // tracing::debug!("Running")
                 }, // All fine
                 State::Prepared => {
-                    tracing::debug!("Starting audio output stream");
+                    // tracing::debug!("Starting audio output stream");
                     pcm.start().unwrap();
                 },
                 State::XRun => {
                     tracing::debug!("Underrun in audio output stream!, will call prepare()");
                     pcm.prepare().unwrap();
-                    tracing::debug!("Current state is {:?}", pcm.state());
+                    // tracing::debug!("Current state is {:?}", pcm.state());
                 },
                 State::Suspended => {
                     tracing::error!("Suspended, will call prepare()");
                     pcm.prepare().unwrap();
-                    tracing::debug!("Current state is {:?}", pcm.state());
+                    // tracing::debug!("Current state is {:?}", pcm.state());
                 },
                 n @ _ => panic!("Unexpected pcm state {:?}", n),
             };
@@ -294,17 +295,33 @@ fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> std::result::Result<bo
 
     let hwp = HwParams::any(&pcm).unwrap();
     hwp.set_channels(config.channels.clone()).unwrap();
-    // hwp.set_rate().unwrap();
+    // // useful for debugging
+    // let (min, max) = (
+    //     hwp.get_rate_min().unwrap(),
+    //     hwp.get_rate_max().unwrap()
+    //     );
+    // tracing::info!("Minrate {:?}, maxrate {:?}", min, max);
+    // // let (min, max) = (
+    // //    hwp.get_period_size_min().unwrap(),
+    // //     hwp.get_period_size_max().unwrap()
+    // // );
+    // tracing::info!("Minps {:?}, maxps {:?}", min, max);
+    hwp.set_rate(config.sample_rate, alsa::ValueOr::Nearest).unwrap();
     hwp.set_access(Access::RWInterleaved).unwrap();
     hwp.set_format(Format::s16()).unwrap();
-    hwp.set_buffer_size(1920).unwrap(); // A few ms latency by default
-    hwp.set_period_size(1920/2, alsa::ValueOr::Nearest).unwrap();
+    hwp.set_buffer_size(1024).unwrap(); // A few ms latency by default
+    // hwp.set_period_size(512, alsa::ValueOr::Nearest).unwrap();
     pcm.hw_params(&hwp).unwrap();
 
     // let swp = pcm.sw_params_current().unwrap();
-    let hwpc = pcm.hw_params_current().unwrap();
-    let (bufsize, periodsize) = (hwpc.get_buffer_size().unwrap(), hwpc.get_period_size().unwrap());
-    tracing::info!("Buffer size is {:?}. period size is {:?}", bufsize, periodsize);
+    // let hwpc = pcm.hw_params_current().unwrap();
+    // let (bufsize, periodsize, rate, channels) = (
+    //     hwpc.get_buffer_size().unwrap(),
+    //     hwpc.get_period_size().unwrap(),
+    //     hwpc.get_rate().unwrap(),
+    //     hwpc.get_channels().unwrap(),
+    // );
+    // tracing::debug!("Buffer size is {:?}. period size is {:?}, sample rate is {:?}, channels {:?}", bufsize, periodsize, rate, channels);
     // swp.set_start_threshold(bufsize - periodsize).unwrap();
     // sw.set_avail_min(periodsize).unwrap();
     // p.sw_params(&swp).unwrap();
