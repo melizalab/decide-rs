@@ -95,6 +95,7 @@ impl Component for AlsaPlayback {
                     audio_dev.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                     break};
 
+                tracing::debug!("Sound_alsa - Awaiting import switch");
                 // block & await completion of import - change to 0
                 wait(&import_switch2, 1);
                 // playback loop
@@ -133,7 +134,7 @@ impl Component for AlsaPlayback {
                     frame_count: frame_count.clone()
                 });
                 playback.store(0, Ordering::Release);
-                audio_dev.drop().unwrap();
+                //audio_dev.drop().unwrap();
             }
         });
         self.shutdown = Some((handle, sd_tx));
@@ -180,16 +181,16 @@ impl Component for AlsaPlayback {
         tracing::debug!("Setting parameters of AlsaPlayback");
         //stop playback & initiate import when params are changed:
         self.playback.store(0, Ordering::Release);
-        self.import_switch.store(1, Ordering::Release);
 
         //import
         let current_dir: String = self.audio_dir.lock().unwrap().drain(..).collect();
-        let import_switch = self.import_switch.clone();
-        let queue = self.playback_queue.clone();
 
         tracing::debug!("Current playback dir :{:?}, requested {:?}", params.audio_dir, current_dir.clone());
 
         if params.audio_dir != current_dir {
+            self.import_switch.store(1, Ordering::Release);
+            let import_switch = self.import_switch.clone();
+            let queue = self.playback_queue.clone();
             let mut audio_dir = self.audio_dir.lock().unwrap();
             *audio_dir = params.audio_dir;
             tracing::debug!("Init import audio");
@@ -394,7 +395,7 @@ fn import_audio(switch: Arc<AtomicU32>,
                 //avoid duplicates
                 if !stim_queue.contains_key(&fname) {
                     //make sure file is an audio file with "wav" extension
-                    if path.extension().unwrap() == "wav" {
+                    if path.extension().is_some_and(|ext|ext == "wav") {
                         let wav = audrey::open(path)
                             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                         let wav_channels = wav.description().channel_count();
