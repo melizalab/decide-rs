@@ -55,7 +55,7 @@ impl Component for PeckLeds {
             let sysfs_chip = fs::canonicalize(
                 PathBuf::from("/sys/class/i2c-adapter/i2c-1/new_device")).unwrap();
             fs::write(sysfs_chip, "pcf8575 0x20").expect("Unable to write to i2c-adapter for peckboard");
-            tracing::debug!("Peckboard chip initiated");
+            tracing::debug!("Peckboard Chip Initiated");
             assert!(Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists());
         }
         thread::sleep(Duration::from_secs(2));
@@ -73,7 +73,7 @@ impl Component for PeckLeds {
     }
 
     async fn init(&mut self, _config: Self::Config) {
-        tracing::debug!("PeckLed init is empty")
+        tracing::info!("PeckLed Initiated")
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -83,7 +83,7 @@ impl Component for PeckLeds {
             "blue" => {self.led_state = LedColor::Blue}
             "green" => {self.led_state = LedColor::Green}
             "white" => {self.led_state = LedColor::White}
-            _ => {tracing::error!("Pecklight state received invalid");}
+            _ => {tracing::error!("PeckLed State received is invalid string {:?}", state.led_state.as_str());}
         }
         let lines_value = self.led_state.as_value();
         self.handles.set_values(&lines_value)
@@ -98,7 +98,7 @@ impl Component for PeckLeds {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("PeckLeds state changed");
+            tracing::info!("PeckLed State Changed by Request");
         });
         Ok(())
     }
@@ -124,6 +124,7 @@ impl Component for PeckLeds {
     }
 
     async fn shutdown(&mut self) {
+        tracing::debug!("Shutdown called for PeckLed");
         self.handles.set_values(&LedColor::Off.as_value())
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     }
@@ -172,7 +173,6 @@ impl Component for PeckKeys {
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
                 .request(LineRequestFlags::INPUT, &[0,0,0], "peck_keys")
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            tracing::debug!("PeckKey Handles created");
 
             loop {
                 match interrupt.next().await {
@@ -185,7 +185,7 @@ impl Component for PeckKeys {
                                 if values.iter().all(|&i| i == first) {
                                     continue
                                 } else {
-                                    tracing::debug!("PeckKey Interrupted - Event {:?} Registered", values);
+                                    tracing::info!("PeckKey Interrupted - Event {:?} Registered", values);
                                     let state = Self::State {
                                         peck_left: values[2] != 0,
                                         peck_center: values[1] != 0,
@@ -206,6 +206,7 @@ impl Component for PeckKeys {
                 }
             }
         }));
+        tracing::info!("PeckKeys Initiated");
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -223,7 +224,7 @@ impl Component for PeckKeys {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::trace!("PeckKeys state changed");
+            tracing::info!("PeckKeys State Changed by Request");
         });
         Ok(())
     }
@@ -234,7 +235,6 @@ impl Component for PeckKeys {
     }
 
     fn get_state(&self) -> Self::State {
-        tracing::trace!("Getting state");
         Self::State{
             peck_left: self.peck_left.load(Ordering::Acquire),
             peck_right: self.peck_right.load(Ordering::Acquire),
@@ -247,6 +247,7 @@ impl Component for PeckKeys {
     }
 
     async fn shutdown(&mut self) {
+        tracing::debug!("Shutdown called for PeckKeys");
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
             task_handle.await

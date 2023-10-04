@@ -54,10 +54,11 @@ impl TryFrom<u8> for RequestType {
 #[derive(Debug, Clone, Copy, ToPrimitive, FromPrimitive, PartialEq)]
 pub enum ComponentRequest {
     ChangeState = 0x00,
-    ResetState = 0x01,
-    SetParameters = 0x02,
-    GetParameters = 0x12,
-    ComponentShutdown = 0x13,
+    GetState = 0x01,
+    ResetState = 0x02,
+    SetParameters = 0x10,
+    GetParameters = 0x11,
+    ComponentShutdown = 0x12,
 }
 
 #[derive(Debug, Clone, Copy, ToPrimitive, FromPrimitive, PartialEq)]

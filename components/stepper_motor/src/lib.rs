@@ -133,8 +133,8 @@ impl Component for StepperMotor {
                 }
             }
         });
-        self.shutdown = Some((motor_handle, shutdown_tx))
-
+        self.shutdown = Some((motor_handle, shutdown_tx));
+        tracing::info!("Stepper Motor Initiated");
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -152,6 +152,7 @@ impl Component for StepperMotor {
                     .unwrap();
             });
         }
+        tracing::info!("Stepper Motor State Changed by Request");
         Ok(())
     }
 
@@ -231,12 +232,12 @@ impl StepperMotor {
                                     .unwrap().event_type();
                 match evt_type {
                     EventType::RisingEdge => {
-                        tracing::debug!("Motor switch 14 off");
+                        tracing::info!("Motor Switch 14 Pressed");
                         //state.running = false;
                         //state.direction = false;
                     }
                     EventType::FallingEdge => {
-                        tracing::debug!("Motor switch 14 on");
+                        tracing::debug!("Motor Switch 14 Depressed");
                         state.running = true;
                         //state.direction = false;
 
@@ -248,12 +249,12 @@ impl StepperMotor {
                                     .unwrap().event_type();
                 match evt_type {
                     EventType::RisingEdge => {
-                        tracing::debug!("Motor switch 15 off");
+                        tracing::debug!("Motor Switch 15 Pressed");
                         //state.running = false;
                         state.direction = true;
                     }
                     EventType::FallingEdge => {
-                        tracing::debug!("Motor switch 15 on");
+                        tracing::debug!("Motor Switch 15 Depressed");
                         state.running = true;
                         state.direction = true;
 

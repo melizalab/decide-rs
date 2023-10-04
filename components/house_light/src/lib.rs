@@ -100,7 +100,7 @@ impl Component for HouseLight {
                     //let duty = HouseLight::get_duty(period, new_brightness);
                     let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
                     fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
-                    tracing::debug!("Brightness {:?} written to file", new_brightness);
+                    tracing::info!("House-Light Brightness Set to {:?} ", new_brightness);
                     brightness.store(new_brightness, Ordering::Relaxed);
 
                     let state = Self::State {
@@ -120,6 +120,7 @@ impl Component for HouseLight {
                 sleep(Duration::from_secs(interval)).await;
             }
         }));
+        tracing::info!("House-Light Initiated");
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -134,7 +135,7 @@ impl Component for HouseLight {
             //let duty = HouseLight::get_duty(self.period, new_brightness);
             fs::write(dev_path, new_brightness.to_string())
                 .expect("Unable to write brightness");
-            tracing::debug!("Brightness {:?} written to file in manual mode", new_brightness);
+            tracing::info!("House-Light Brightness Set to {:?} Manually", new_brightness);
             self.brightness.store(new_brightness, Ordering::Relaxed);
 
         } else {
@@ -151,7 +152,7 @@ impl Component for HouseLight {
             //let duty = HouseLight::get_duty(period, new_brightness);
             let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
             fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
-            tracing::debug!("Brightness {:?} written to file", new_brightness);
+            tracing::info!("House-Light Brightness Set to {:?} ", new_brightness);
             self.brightness.store(new_brightness, Ordering::Relaxed);
         }
 
@@ -164,7 +165,7 @@ impl Component for HouseLight {
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })
                 .unwrap();
-            tracing::debug!("House-light state changed");
+            tracing::debug!("House-Light State Changed by Request");
         });
 
         Ok(())

@@ -111,6 +111,14 @@ macro_rules! impl_components {
                          )*
                     }
                 }
+                pub fn get_encoded_state(&self) -> Any {
+                    match self {
+                        $(
+                            ComponentKind::$component(t) => t.get_encoded_state(),
+                         )*
+                    }
+
+                }
                 pub fn decode_and_set_parameters(&mut self, message: Any) -> Result<()> {
                     match self {
                         $(

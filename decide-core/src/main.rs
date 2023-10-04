@@ -5,7 +5,7 @@ use tracing_subscriber::filter::EnvFilter;
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> anyhow::Result<()> {
     let filter = EnvFilter::try_from_env("DECIDE_LOG")
-        .or_else(|_| EnvFilter::try_new("debug"))
+        .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
     tracing_subscriber::fmt()
         .pretty()

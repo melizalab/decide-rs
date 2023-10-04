@@ -148,7 +148,7 @@ impl ComponentCollection {
 
     async fn handle_request(&mut self, request: Multipart) -> Result<proto::Reply> {
         let request = Request::try_from(request)?;
-        info!("Received request {:?}", request);
+        info!("Received Request {:?} for {:?}", request.request_type, request.component);
         match request.request_type {
             RequestType::General(req) => self.handle_general(req, request.body).await,
             RequestType::Component(req) => self.handle_component(req, request).await,
@@ -234,6 +234,10 @@ async fn execute(
             let state_change = proto::StateChange::decode(&*payload).map_err(ClientError::from)?;
             component.decode_and_change_state(state_change.state.ok_or(ClientError::NoState)?)?;
             proto::reply::Result::Ok(())
+        }
+        GetState => {
+            let state = component.get_encoded_state();
+            proto::reply::Result::State(state)
         }
         ResetState => {
             component.reset_state()?;

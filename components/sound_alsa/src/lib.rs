@@ -78,8 +78,7 @@ impl Component for AlsaPlayback {
         self.sample_rate.store(config.sample_rate, Ordering::Release);
         //playback thread
         let handle = thread::spawn(move || {
-            tracing::debug!("AlsaPlayback - Playback Thread created");
-
+            tracing::info!("Sound-Alsa: Playback Thread created");
             let audio_dev = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
@@ -102,7 +101,7 @@ impl Component for AlsaPlayback {
                 tracing::debug!("Sound_alsa - Awaiting playback request");
                 // Block and await playback change to 1
                 wait(&playback, 0);
-
+                tracing::info!("Sound-Alsa: Playback Initiated!");
                 let stim = audio_id.lock().unwrap();
                 let stim_name = OsString::from(stim.clone());
                 let stim_queue = queue.lock().unwrap();
@@ -126,7 +125,7 @@ impl Component for AlsaPlayback {
                 if !AlsaPlayback::playback_io(&audio_dev, &mut io, &data.0, frame_count, &playback).unwrap() {
                     continue 'stim
                 }
-                tracing::debug!("Completed stim!");
+                tracing::info!("Sound-Alsa: Playback Completed!");
                 // playback finished without interruption. Send info about completed stim
                 AlsaPlayback::send_state(sender.clone(), Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
@@ -174,30 +173,30 @@ impl Component for AlsaPlayback {
         };
         //we do not send actual state change PUB messages in change_state(), since it's more important
         //that PUB msgs come from the playback thread
+        tracing::info!("Sound-Alsa: State Changed by Request");
         Ok(())
     }
 
     fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
-        tracing::debug!("Setting parameters of AlsaPlayback");
         //stop playback & initiate import when params are changed:
         self.playback.store(0, Ordering::Release);
 
         //import
         let current_dir: String = self.audio_dir.lock().unwrap().drain(..).collect();
 
-        tracing::debug!("Current playback dir :{:?}, requested {:?}", params.audio_dir, current_dir.clone());
+        tracing::info!("Current Playback Directory :{:?}, Requested Directory {:?}", current_dir.clone(), params.audio_dir, );
 
         if params.audio_dir != current_dir {
             self.import_switch.store(1, Ordering::Release);
             let import_switch = self.import_switch.clone();
             let queue = self.playback_queue.clone();
             let mut audio_dir = self.audio_dir.lock().unwrap();
-            *audio_dir = params.audio_dir;
-            tracing::debug!("Init import audio");
+            *audio_dir = params.audio_dir.clone();
+            tracing::debug!("Calling Audio Import Function");
             import_audio(import_switch, queue, self.channels.clone(),
-                         self.audio_dir.clone(),self.audio_count.clone())
+                         params.audio_dir,self.audio_count.clone())
         };
-        tracing::debug!("Sound playback parameters changed");
+        tracing::info!("Sound-Alsa Parameters Changed");
         Ok(())
     }
 
@@ -252,11 +251,11 @@ impl AlsaPlayback{
         tracing::debug!("Available buffer for playback is {:?}", avail);
         // assert!(avail > 0);
         let mut pointer = 0;
-        let mut written: usize = 0;
+        let mut _written: usize = 0;
         //loop while playing
         while (pointer < frames-1) & (playback.load(Ordering::Acquire) == 1) {
             let slice = if pointer+512>frames {&data[pointer..]} else {&data[pointer..pointer+512]};
-            written = match io.writei(slice) {
+            _written = match io.writei(slice) {
                 Ok(n) => n,
                 Err(e) => {
                     tracing::error!("Recovering from {}", e);
@@ -264,7 +263,7 @@ impl AlsaPlayback{
                     0
                 }
             };
-            pointer += written;
+            pointer += _written;
             // tracing::debug!("Frames written: {:?}, frames remaining: {:?}", written, frames-pointer);
             match pcm.state() {
                 State::Running => {
@@ -275,7 +274,7 @@ impl AlsaPlayback{
                     pcm.start().unwrap();
                 },
                 State::XRun => {
-                    tracing::debug!("Underrun in audio output stream!, will call prepare()");
+                    tracing::warn!("Underrun in audio output stream!, will call prepare()");
                     pcm.prepare().unwrap();
                     // tracing::debug!("Current state is {:?}", pcm.state());
                 },
@@ -366,14 +365,13 @@ fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) ->
 fn import_audio(switch: Arc<AtomicU32>,
                 queue: Arc<Mutex<HashMap<OsString, (Vec<i16>,u32)>>>,
                 channels: bool,
-                audio_dir: Arc<Mutex<String>>,
+                audio_dir: String,
                 audio_count: Arc<AtomicU32>) {
-    tokio::spawn(async move {
-        tracing::debug!("Creating task to import audio");
-        let dir = audio_dir.lock().unwrap();
-        let mut reader = read_dir(Path::new(&*dir))
+    thread::spawn(move || {
+        tracing::info!("Begin Importing Audio");
+        let mut reader = read_dir(Path::new(&audio_dir))
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-        let mut entry= reader.next();
+        let mut entry = reader.next();
         //fails if provided dir is empty
         if entry.is_some() {
             //begin reading files
@@ -384,8 +382,8 @@ fn import_audio(switch: Arc<AtomicU32>,
                 //path() returns the full path of the file
                 let path = file.path();
                 //strip the stored dir from full path
-                let fname = OsString::from(path.clone().strip_prefix(&*dir)
-                    .map_err(|e|DecideError::Component { source: e.into() })
+                let fname = OsString::from(path.clone().strip_prefix(&*audio_dir)
+                    .map_err(|e| DecideError::Component { source: e.into() })
                     .unwrap().file_stem().unwrap());
 
                 let mut stim_queue = queue.lock()
@@ -395,29 +393,29 @@ fn import_audio(switch: Arc<AtomicU32>,
                 //avoid duplicates
                 if !stim_queue.contains_key(&fname) {
                     //make sure file is an audio file with "wav" extension
-                    if path.extension().is_some_and(|ext|ext == "wav") {
+                    if path.extension().is_some_and(|ext| ext == "wav") {
                         let wav = audrey::open(path)
                             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
                         let wav_channels = wav.description().channel_count();
-                        let hw_channels = if channels {2} else {1};
-                        tracing::debug!("Importing file {:?}", fname);
+                        let hw_channels = if channels { 2 } else { 1 };
+                        tracing::info!("Importing file {:?}", fname);
                         let stim = process_audio(wav, wav_channels, hw_channels);
-                        stim_queue.insert(fname.clone(),stim);
+                        stim_queue.insert(fname.clone(), stim);
                     }
                 }
                 entry = reader.next();
             }
-        } else {tracing::info!("Current audio directory is empty!")}
+        } else { tracing::info!("Current audio directory is empty!") }
         tracing::info!("Finished importing audio files");
         //add number of stims:
         let length = queue.lock().unwrap()
             .keys().len() as u32;
         audio_count.store(length, Ordering::Relaxed);
         //ref line 117
-        switch.store(0,Ordering::Release);
+        switch.store(0, Ordering::Release);
         let sw = switch.as_ref();
         wake_all(sw);
-    });
+    }).join().expect("Sound-Alsa: Import Failed!");
 }
 
 pub mod proto {
