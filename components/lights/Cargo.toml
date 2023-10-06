@@ -10,7 +10,7 @@ edition = "2018"
 decide-protocol = { path = "../../decide-protocol" }
 prost = "0.9"
 tokio = { version = "1.12", features = ["full"] }
-prost-types = "0.9"
+prost-types = "0.11.1"
 async-trait = "0.1.51"
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1.29"
@@ -23,6 +23,10 @@ test-log = { version = "0.2.8", default-features = false, features = ["trace"] }
 env_logger = "*"
 tracing = {version = "0.1", default-features = false}
 tracing-subscriber = {version = "0.3", default-features = false, features = ["env-filter", "fmt"]}
+rstest = "0.12.0"
+decide-core = { path = "../../decide-core"}
+async-std = { version = "1.5", features = ["attributes"] }
+
 
 [build-dependencies]
 prost-build = "0.9"

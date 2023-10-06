@@ -73,4 +73,6 @@ pub enum ControllerError {
     ConfigDeserializationError { source: DeserializerError },
     #[error("unrecognized component driver name `{0}`")]
     UnknownDriver(String),
+    #[error("component {component:?} failed to shutdown before timeout period")]
+    ShutdownTimeout { component: ComponentName },
 }
