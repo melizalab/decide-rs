@@ -8,6 +8,8 @@ package decide;
 service DecideControl {
   // request change to state of a component
   rpc ChangeState(StateChange) returns (Reply);
+  // request current state of a component
+  rpc GetState(google.protobuf.Empty) returns (StateChange);
   // request reset to default state
   rpc ResetState(google.protobuf.Empty) returns (Reply);
   // request lock on experiment
@@ -46,6 +48,8 @@ message Reply {
     string error = 3;
     // reply to get_parameters
     google.protobuf.Any params = 19;
+    // reply to get_state
+    google.protobuf.Any state = 20;
   }
 }
 

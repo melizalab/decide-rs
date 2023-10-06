@@ -5,7 +5,7 @@ software to manipulate experimental state and broadcast state changes.
 -   Name: 3/decide
 -   Editor: Dan Meliza (dan at meliza.org)
 -   Version: 2.0
--   State:  draft
+-   State:  deployed
 -   URL: <https://meliza.org/spec:3/decide-ctrl/>
 
 ## Goals and framework
@@ -89,19 +89,28 @@ A request consists of the following zmq frames:
 
 Requests that the state of the component specified in frame 4 be set to the state given in the request body. The request body should be a `StateChange` protocol buffer. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
 
-#### Reset state (0x01)
+#### Get component's current state (0x01)
+
+Requests that the controller reply with the state of the component specified in frame 4. The
+request body should be empty.
+
+#### Reset state (0x02)
 
 Requests that the state of the component specified in frame 4 be reset to its default value. The request body should be empty. Controller will reply with error if the component does not exist or the request was badly formed, and with OK otherwise. Note that the actual state change will be broadcast on the PUB channel.
 
-#### Set parameters (0x02)
+#### Set parameters (0x10)
 
 Requests that the parameters of the component specified in frame 4 be set to the state given in the
 request body. The request body should be a `ComponentParams` protocol buffer.
 
-#### Get component parameters (0x12)
+#### Get component parameters (0x11)
 
 Requests that the controller reply with the parameters of the component specified in frame 4. The
 request body should be empty.
+
+#### Shutdown component (0x12)
+
+Currently not fully implemented.
 
 #### Lock controller (0x20)
 
@@ -114,7 +123,8 @@ Unlock the controller. The request body should be empty.
 
 #### Shutdown (0x22)
 
-Shutdown the controller. The request body should be empty.
+Shutdown the controller. The request body should be empty. The controller will shut down immediately
+without replying.
 
 ### REP messages
 
@@ -134,6 +144,8 @@ message Reply {
     string error = 3;
     // reply to get_parameters
     google.protobuf.Any params = 19;
+    // reply to get_state
+    google.protobuf.Any state = 20
   }
 }
 ```
