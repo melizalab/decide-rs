@@ -20,7 +20,7 @@ cross build --target armv7-unknown-linux-gnueabihf --release
 ```
 
 ## Logging
-Logging level defaults to DEBUG, but can be overwritten with `export DECIDE_LOG="value"`
+Logging level defaults to INFO, but can be overwritten with `export DECIDE_LOG="value"`
 
 ## running tests
 

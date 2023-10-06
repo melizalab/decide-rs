@@ -66,12 +66,7 @@ impl Component for HouseLight {
                 if manual.load(Ordering::Acquire) {
                     let bt = brightness.load(Ordering::Acquire);
                     let dt = bt > 0;
-                    //daytime.store(dt, Ordering::Release);
-                    //let duty = HouseLight::get_duty(period, new_brightness);
-                    //let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
-                    //fs::write(path, new_brightness).expect("Unable to write brightness");
                     tracing::debug!("Currently in manual mode, no need to adjust brightness");
-
                     let state = Self::State {
                         manual: true,
                         dyson: false,
@@ -105,7 +100,7 @@ impl Component for HouseLight {
 
                     let state = Self::State {
                         manual: false,
-                        dyson: dyson,
+                        dyson,
                         brightness: new_brightness as i32,
                         daytime: dt
                     };
@@ -129,9 +124,10 @@ impl Component for HouseLight {
         self.manual.store(state.manual, Ordering::Relaxed);
         self.dyson.store(state.dyson, Ordering::Relaxed);
 
+        let mut new_brightness: u8 = 0;
         // Change brightness immediately
         if state.manual {
-            let new_brightness = state.brightness as u8;
+            new_brightness = state.brightness as u8;
             //let duty = HouseLight::get_duty(self.period, new_brightness);
             fs::write(dev_path, new_brightness.to_string())
                 .expect("Unable to write brightness");
@@ -145,10 +141,9 @@ impl Component for HouseLight {
                                                      self.config.fake_dusk,
                                                      self.config.lat,
                                                      self.config.lon);
-            let new_brightness = HouseLight::calc_brightness(altitude, self.config.max_brightness);
+            new_brightness = HouseLight::calc_brightness(altitude, self.config.max_brightness);
             let dt = new_brightness > 0;
             self.daytime.store(dt, Ordering::Release);
-
             //let duty = HouseLight::get_duty(period, new_brightness);
             let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
             fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
@@ -156,11 +151,17 @@ impl Component for HouseLight {
             self.brightness.store(new_brightness, Ordering::Relaxed);
         }
 
+        let new_state = Self::State {
+            manual: state.manual,
+            dyson: state.dyson,
+            brightness: new_brightness as i32,
+            daytime: self.daytime.load(Ordering::Relaxed)
+        };
         tokio::spawn(async move {
             sender
                 .send(Any {
                     type_url: String::from(Self::STATE_TYPE_URL),
-                    value: state.encode_to_vec(),
+                    value: new_state.encode_to_vec(),
                 })
                 .await
                 .map_err(|e| DecideError::Component { source: e.into() })

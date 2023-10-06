@@ -169,7 +169,6 @@ impl Component for AlsaPlayback {
                     _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
                 }
             }
-            // _ => {tracing::error!("Unacceptable value found in playback control variable {:?}", state.playback)}
         };
         //we do not send actual state change PUB messages in change_state(), since it's more important
         //that PUB msgs come from the playback thread
@@ -184,7 +183,8 @@ impl Component for AlsaPlayback {
         //import
         let current_dir: String = self.audio_dir.lock().unwrap().drain(..).collect();
 
-        tracing::info!("Current Playback Directory :{:?}, Requested Directory {:?}", current_dir.clone(), params.audio_dir, );
+        tracing::info!("Current Playback Directory :{:?}, Requested Directory {:?}",
+            current_dir.clone(), params.audio_dir);
 
         if params.audio_dir != current_dir {
             self.import_switch.store(1, Ordering::Release);
@@ -217,10 +217,10 @@ impl Component for AlsaPlayback {
     }
 
     async fn shutdown(&mut self) {
+        tracing::info!("Sound-Alsa: Shutdown Called");
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
             drop(handle);
-            //handle.abort();
         }
     }
 }
@@ -249,7 +249,6 @@ impl AlsaPlayback{
             }
         } as usize;
         tracing::debug!("Available buffer for playback is {:?}", avail);
-        // assert!(avail > 0);
         let mut pointer = 0;
         let mut _written: usize = 0;
         //loop while playing
@@ -264,24 +263,19 @@ impl AlsaPlayback{
                 }
             };
             pointer += _written;
-            // tracing::debug!("Frames written: {:?}, frames remaining: {:?}", written, frames-pointer);
             match pcm.state() {
                 State::Running => {
-                    // tracing::debug!("Running")
                 }, // All fine
                 State::Prepared => {
-                    // tracing::debug!("Starting audio output stream");
                     pcm.start().unwrap();
                 },
                 State::XRun => {
                     tracing::warn!("Underrun in audio output stream!, will call prepare()");
                     pcm.prepare().unwrap();
-                    // tracing::debug!("Current state is {:?}", pcm.state());
                 },
                 State::Suspended => {
                     tracing::error!("Suspended, will call prepare()");
                     pcm.prepare().unwrap();
-                    // tracing::debug!("Current state is {:?}", pcm.state());
                 },
                 n @ _ => panic!("Unexpected pcm state {:?}", n),
             };
@@ -295,37 +289,12 @@ fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> std::result::Result<bo
 
     let hwp = HwParams::any(&pcm).unwrap();
     hwp.set_channels(config.channels.clone()).unwrap();
-    // // useful for debugging
-    // let (min, max) = (
-    //     hwp.get_rate_min().unwrap(),
-    //     hwp.get_rate_max().unwrap()
-    //     );
-    // tracing::info!("Minrate {:?}, maxrate {:?}", min, max);
-    // // let (min, max) = (
-    // //    hwp.get_period_size_min().unwrap(),
-    // //     hwp.get_period_size_max().unwrap()
-    // // );
-    // tracing::info!("Minps {:?}, maxps {:?}", min, max);
     hwp.set_rate(config.sample_rate, alsa::ValueOr::Nearest).unwrap();
     hwp.set_access(Access::RWInterleaved).unwrap();
     hwp.set_format(Format::s16()).unwrap();
     hwp.set_buffer_size(1024).unwrap(); // A few ms latency by default
     // hwp.set_period_size(512, alsa::ValueOr::Nearest).unwrap();
     pcm.hw_params(&hwp).unwrap();
-
-    // let swp = pcm.sw_params_current().unwrap();
-    // let hwpc = pcm.hw_params_current().unwrap();
-    // let (bufsize, periodsize, rate, channels) = (
-    //     hwpc.get_buffer_size().unwrap(),
-    //     hwpc.get_period_size().unwrap(),
-    //     hwpc.get_rate().unwrap(),
-    //     hwpc.get_channels().unwrap(),
-    // );
-    // tracing::debug!("Buffer size is {:?}. period size is {:?}, sample rate is {:?}, channels {:?}", bufsize, periodsize, rate, channels);
-    // swp.set_start_threshold(bufsize - periodsize).unwrap();
-    // sw.set_avail_min(periodsize).unwrap();
-    // p.sw_params(&swp).unwrap();
-
     Ok(true)
 }
 
