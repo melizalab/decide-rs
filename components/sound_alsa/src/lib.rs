@@ -358,6 +358,7 @@ fn import_audio(switch: Arc<AtomicU32>,
                 let mut stim_queue = queue.lock()
                     .map_err(|_e| tracing::error!("Couldn't acquire lock on playlist"))
                     .unwrap();
+                stim_queue.clear();
 
                 //avoid duplicates
                 if !stim_queue.contains_key(&fname) {
