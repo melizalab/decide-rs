@@ -163,8 +163,13 @@ impl Component for PeckKeys {
             ).unwrap())                         // gives us both edges.
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
 
-            let mut chip4 = Chip::new(config.peckboard_chip.clone())
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            let mut chip4 = loop {
+                let chip_result = Chip::new(config.peckboard_chip.clone());
+                match chip_result {
+                    Ok(chip4) => {break chip4}
+                    Err(_) => {continue}
+                }
+            };
             chip4.get_lines(&config.ir_offsets)
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
                 .request(LineRequestFlags::OUTPUT, &[1,1,1], "peckboard_ir")

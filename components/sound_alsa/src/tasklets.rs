@@ -1,23 +1,17 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs::{File, read_dir};
+use std::fs::File;
 use std::path::Path;
-use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
-use atomic_wait::{wait, wake_all};
-use alsa::{Direction, pcm::{Access, Format, HwParams, PCM, State}};
-use async_trait::async_trait;
+use serde_json;
+use alsa::{pcm::{Access, Format, HwParams, PCM, State}};
+use atomic_wait::wake_all;
 use audrey::read::BufFileReader;
-use futures::TryStreamExt;
-use prost::Message;
-use prost_types::Any;
 use serde::Deserialize;
 use walkdir::WalkDir;
-use tokio::{self, sync::mpsc::Sender as tkSender};
-use decide_protocol::{Component,
-                      error::{DecideError}
-};
+use decide_protocol::error::DecideError;
 
 pub fn import_audio(switch: Arc<AtomicU32>,
                 queue: Arc<Mutex<HashMap<OsString, (Vec<i16>,u32)>>>,
@@ -28,7 +22,7 @@ pub fn import_audio(switch: Arc<AtomicU32>,
         tracing::info!("Begin Importing Audio from {:?}", conf_path);
         let config_file_path = Path::new(&conf_path);
         let config_file = File::open(config_file_path)
-            .map_err(|e| Err("Couldn't Open Config File Specified {:?}"));
+            .map_err(|e| panic!("Couldn't Open Config File Specified {:?}", e)).unwrap();
         let exp_config: ConfFile = serde_json::from_reader(config_file)
             .map_err(|e| DecideError::Component { source: e.into()}).unwrap();
         tracing::info!("Stimulus Root Specified as {:?}", &exp_config.stimulus_root);
@@ -41,14 +35,13 @@ pub fn import_audio(switch: Arc<AtomicU32>,
                 .map(|s| e.depth() == 0 || !s.starts_with("."))
                 .unwrap_or(false))
         {
-            let fname = Path::new(&entry.file_name().to_str())
-                .file_name().unwrap();
-            if playlist.contains(&fname.into()) {
+            let fname = Path::new(&entry.file_name().to_str().unwrap())
+                .file_stem().unwrap().to_os_string();
+            if playlist.contains(&fname) {
                 let path = entry.path();
                 let mut stim_queue = queue.lock()
                     .map_err(|_e| tracing::error!("Couldn't acquire lock on playlist"))
                     .unwrap();
-                stim_queue.clear();
                 //avoid duplicates
                 if !stim_queue.contains_key(&fname) {
                     //make sure file is an audio file with "wav" extension
@@ -173,15 +166,15 @@ pub fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>
 
 #[derive(Deserialize)]
 pub struct Config {
-    audio_device: String,
-    sample_rate: u32,
-    channels: u32,
+    pub audio_device: String,
+    pub sample_rate: u32,
+    pub channels: u32,
 }
 
 #[derive(Debug, Deserialize)]
 struct Stimulus {
     name: String,
-    frequency: u32, // ignore responses and categories fpr now
+    //frequency: u32, // ignore responses and categories fpr now
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,9 +184,9 @@ struct ConfFile {
 }
 
 impl ConfFile {
-    fn get_names(&self) -> Vec<String> {
+    fn get_names(&self) -> Vec<OsString> {
         self.stimuli.iter()
-            .map(|stim| stim.name)
-            .collect::<Vec<String>>()
+            .map(|stim| OsString::from(&stim.name))
+            .collect::<Vec<OsString>>()
     }
 }

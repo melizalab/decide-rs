@@ -1,20 +1,18 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs::read_dir;
-use std::path::Path;
-use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::sync::{Arc, mpsc as std_mpsc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
-use atomic_wait::{wait, wake_all};
-use alsa::{Direction, pcm::{Access, Format, HwParams, PCM, State}};
+
+use alsa::{Direction, pcm::PCM};
 use async_trait::async_trait;
-use audrey::read::BufFileReader;
+use atomic_wait::{wait, wake_all};
 use prost::Message;
 use prost_types::Any;
-use serde::Deserialize;
 use tokio::{self, sync::mpsc::Sender as tkSender};
+
 use decide_protocol::{Component,
-                      error::{DecideError}
+                      error::DecideError
 };
 
 mod tasklets;
@@ -108,13 +106,14 @@ impl Component for AlsaPlayback {
                 let stim_name = OsString::from(stim.clone());
                 let stim_queue = queue.lock().unwrap();
                 let data = stim_queue.get(&*stim_name)
-                    .ok_or("Requested Stimuli not found in Queue!")
+                    .ok_or("")
+                    .map_err(|_e| tracing::error!("Requested {:?} from Playlist: {:?}", stim_name, stim_queue.keys()))
                     .unwrap();
 
                 let frame_count = data.1.clone();
                 frames.store(frame_count.clone(), Ordering::Release);
 
-                send_state(sender.clone(), Self::State {
+                Self::send_state(sender.clone(), Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
                     playback: true,
                     frame_count: frame_count.clone()
@@ -134,7 +133,7 @@ impl Component for AlsaPlayback {
                 }
                 tracing::info!("Sound-Alsa: Playback Completed!");
                 // playback finished without interruption. Send info about completed stim
-                send_state(sender.clone(), Self::State {
+                Self::send_state(sender.clone(), Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
                     playback: false,
                     frame_count: frame_count.clone()
@@ -194,10 +193,13 @@ impl Component for AlsaPlayback {
             current_conf.clone(), params.conf_path);
 
         if params.conf_path != current_conf {
+            let mut stim_queue = self.playback_queue.lock().unwrap();
+            stim_queue.clear();
+            std::mem::drop(stim_queue);
             self.import_switch.store(1, Ordering::Release);
             let import_switch = self.import_switch.clone();
             let queue = self.playback_queue.clone();
-            let mut current_conf = self.current_conf.lock().unwrap();
+            let mut current_conf = self.conf_path.lock().unwrap();
             *current_conf = params.conf_path.clone();
             tracing::debug!("Calling Audio Import Function");
             tasklets::import_audio(import_switch, queue, self.channels.clone(),
@@ -232,16 +234,18 @@ impl Component for AlsaPlayback {
     }
 }
 
-fn send_state(sender: tkSender<Any>, state: proto::SaState) {
-    let message = Any {
-        value: state.encode_to_vec(),
-        type_url: Self::STATE_TYPE_URL.into(),
-    };
-    assert!(!sender.is_closed());
-    sender.blocking_send(message)
-        .map_err(|e| DecideError::Component { source: e.into() })
-        .unwrap();
-    tracing::debug!("AlsaPlayback - state sent");
+impl AlsaPlayback {
+    fn send_state(sender: tkSender<Any>, state: proto::SaState) {
+        let message = Any {
+            value: state.encode_to_vec(),
+            type_url: Self::STATE_TYPE_URL.into(),
+        };
+        assert!(!sender.is_closed());
+        sender.blocking_send(message)
+            .map_err(|e| DecideError::Component { source: e.into() })
+            .unwrap();
+        tracing::debug!("AlsaPlayback - state sent");
+    }
 }
 
 pub mod proto {
