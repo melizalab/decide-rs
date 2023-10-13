@@ -17,8 +17,10 @@ use decide_protocol::{Component,
                       error::{DecideError}
 };
 
+mod tasklets;
+
 pub struct AlsaPlayback {
-    audio_dir: Arc<Mutex<String>>,
+    conf_path: Arc<Mutex<String>>,
     audio_id: Arc<Mutex<String>>,
     audio_count: Arc<AtomicU32>,
     channels: bool,
@@ -35,7 +37,7 @@ pub struct AlsaPlayback {
 impl Component for AlsaPlayback {
     type State = proto::SaState;
     type Params = proto::SaParams;
-    type Config = Config;
+    type Config = tasklets::Config;
     const STATE_TYPE_URL: &'static str = "type.googleapis.com/SaState";
     const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/SaParams";
 
@@ -43,7 +45,7 @@ impl Component for AlsaPlayback {
 
         AlsaPlayback{
             audio_id: Arc::new(Mutex::new(String::from("None"))),
-            audio_dir: Arc::new(Mutex::new(String::from("None"))),
+            conf_path: Arc::new(Mutex::new(String::from("None"))),
             audio_count: Arc::new(AtomicU32::new(0)),
             channels: false, //mono
             sample_rate: Arc::new(AtomicU32::new(0)),
@@ -82,7 +84,7 @@ impl Component for AlsaPlayback {
             let audio_dev = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
-            get_hw_config(&audio_dev, &config).unwrap();
+            tasklets::get_hw_config(&audio_dev, &config).unwrap();
             // let mut mmap = audio_dev.direct_mmap_playback::<i16>();
             let mut io = audio_dev.io_i16()
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
@@ -105,12 +107,14 @@ impl Component for AlsaPlayback {
                 let stim = audio_id.lock().unwrap();
                 let stim_name = OsString::from(stim.clone());
                 let stim_queue = queue.lock().unwrap();
-                let data = stim_queue.get(&*stim_name).unwrap();
+                let data = stim_queue.get(&*stim_name)
+                    .ok_or("Requested Stimuli not found in Queue!")
+                    .unwrap();
 
                 let frame_count = data.1.clone();
                 frames.store(frame_count.clone(), Ordering::Release);
 
-                AlsaPlayback::send_state(sender.clone(), Self::State {
+                send_state(sender.clone(), Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
                     playback: true,
                     frame_count: frame_count.clone()
@@ -118,16 +122,19 @@ impl Component for AlsaPlayback {
                 match audio_dev.prepare() {
                     Ok(n) => n,
                     Err(e) => {
-                        tracing::warn!("Audio-playback failed to prepare for playback, recovering from {}", e);
-                        audio_dev.recover(e.errno() as std::os::raw::c_int, true).unwrap();
+                        tracing::warn!("Audio-playback failed to prepare for playback\
+                                        , recovering from {}", e);
+                        audio_dev.recover(e.errno() as std::os::raw::c_int, true)
+                            .unwrap();
                     }
                 }
-                if !AlsaPlayback::playback_io(&audio_dev, &mut io, &data.0, frame_count, &playback).unwrap() {
+                if !tasklets::playback_io(&audio_dev, &mut io, &data.0,
+                                          frame_count, &playback).unwrap() {
                     continue 'stim
                 }
                 tracing::info!("Sound-Alsa: Playback Completed!");
                 // playback finished without interruption. Send info about completed stim
-                AlsaPlayback::send_state(sender.clone(), Self::State {
+                send_state(sender.clone(), Self::State {
                     audio_id: stim_name.clone().into_string().unwrap(),
                     playback: false,
                     frame_count: frame_count.clone()
@@ -181,20 +188,20 @@ impl Component for AlsaPlayback {
         self.playback.store(0, Ordering::Release);
 
         //import
-        let current_dir: String = self.audio_dir.lock().unwrap().drain(..).collect();
+        let current_conf: String = self.conf_path.lock().unwrap().drain(..).collect();
 
         tracing::info!("Current Playback Directory :{:?}, Requested Directory {:?}",
-            current_dir.clone(), params.audio_dir);
+            current_conf.clone(), params.conf_path);
 
-        if params.audio_dir != current_dir {
+        if params.conf_path != current_conf {
             self.import_switch.store(1, Ordering::Release);
             let import_switch = self.import_switch.clone();
             let queue = self.playback_queue.clone();
-            let mut audio_dir = self.audio_dir.lock().unwrap();
-            *audio_dir = params.audio_dir.clone();
+            let mut current_conf = self.current_conf.lock().unwrap();
+            *current_conf = params.conf_path.clone();
             tracing::debug!("Calling Audio Import Function");
-            import_audio(import_switch, queue, self.channels.clone(),
-                         params.audio_dir,self.audio_count.clone())
+            tasklets::import_audio(import_switch, queue, self.channels.clone(),
+                                   params.conf_path,self.audio_count.clone())
         };
         tracing::info!("Sound-Alsa Parameters Changed");
         Ok(())
@@ -210,7 +217,7 @@ impl Component for AlsaPlayback {
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params {
-            audio_dir: self.audio_dir.lock().unwrap().clone(),
+            conf_path: self.conf_path.lock().unwrap().clone(),
             audio_count: self.audio_count.load(Ordering::Relaxed),
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
         }
@@ -225,175 +232,18 @@ impl Component for AlsaPlayback {
     }
 }
 
-impl AlsaPlayback{
-    fn send_state(sender: tkSender<Any>, state: proto::SaState) {
-        let message = Any {
-            value: state.encode_to_vec(),
-            type_url: Self::STATE_TYPE_URL.into(),
-        };
-        assert!(!sender.is_closed());
-        sender.blocking_send(message)
-            .map_err(|e| DecideError::Component { source: e.into() })
-            .unwrap();
-        tracing::debug!("AlsaPlayback - state sent");
-    }
-    fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, frames: u32, playback: &Arc<AtomicU32>)
-        -> std::result::Result<bool, String> {
-        let frames: usize = frames.try_into().unwrap();
-        let avail = match pcm.avail_update() {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!("Audio-playback failed to call available update, recovering from {}", e);
-                pcm.recover(e.errno() as std::os::raw::c_int, true).unwrap();
-                pcm.avail_update().unwrap()
-            }
-        } as usize;
-        tracing::debug!("Available buffer for playback is {:?}", avail);
-        let mut pointer = 0;
-        let mut _written: usize = 0;
-        //loop while playing
-        while (pointer < frames-1) & (playback.load(Ordering::Acquire) == 1) {
-            let slice = if pointer+512>frames {&data[pointer..]} else {&data[pointer..pointer+512]};
-            _written = match io.writei(slice) {
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::error!("Recovering from {}", e);
-                    pcm.recover(e.errno() as std::os::raw::c_int, true).unwrap();
-                    0
-                }
-            };
-            pointer += _written;
-            match pcm.state() {
-                State::Running => {
-                }, // All fine
-                State::Prepared => {
-                    pcm.start().unwrap();
-                },
-                State::XRun => {
-                    tracing::warn!("Underrun in audio output stream!, will call prepare()");
-                    pcm.prepare().unwrap();
-                },
-                State::Suspended => {
-                    tracing::error!("Suspended, will call prepare()");
-                    pcm.prepare().unwrap();
-                },
-                n @ _ => panic!("Unexpected pcm state {:?}", n),
-            };
-        };
-        Ok(true)
-    }
-}
-
-
-fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> std::result::Result<bool, String>{
-
-    let hwp = HwParams::any(&pcm).unwrap();
-    hwp.set_channels(config.channels.clone()).unwrap();
-    hwp.set_rate(config.sample_rate, alsa::ValueOr::Nearest).unwrap();
-    hwp.set_access(Access::RWInterleaved).unwrap();
-    hwp.set_format(Format::s16()).unwrap();
-    hwp.set_buffer_size(1024).unwrap(); // A few ms latency by default
-    // hwp.set_period_size(512, alsa::ValueOr::Nearest).unwrap();
-    pcm.hw_params(&hwp).unwrap();
-    Ok(true)
-}
-
-fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) -> (Vec<i16>,u32){
-    let mut result = Vec::new();
-    if wav_channels == 1 {
-        result = wav.frames::<[i16;1]>()
-            .map(Result::unwrap)
-            .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 1.0))
-            .map(|note| note[0])
-            .collect::<Vec<i16>>();
-        if hw_channels == 2 {
-            result = result.iter()
-                .map(|note| [note, note])
-                .flatten()
-                .map(|f| *f )
-                .collect::<Vec<_>>()
-        }
-    } else if wav_channels == 2 {
-        result = wav.frames::<[i16;2]>()
-            .map(Result::unwrap)
-            .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 1.0))
-            .flatten()
-            .collect::<Vec<i16>>();
-        if hw_channels == 1 {
-            result = result.iter()
-                .enumerate()
-                .filter(|f| f.0.clone() % 2 == 0)
-                .map(|f| *f.1)
-                .collect::<Vec<_>>()
-        }
+fn send_state(sender: tkSender<Any>, state: proto::SaState) {
+    let message = Any {
+        value: state.encode_to_vec(),
+        type_url: Self::STATE_TYPE_URL.into(),
     };
-    let length = result.len() as u32;
-    return (result, length);
-}
-
-fn import_audio(switch: Arc<AtomicU32>,
-                queue: Arc<Mutex<HashMap<OsString, (Vec<i16>,u32)>>>,
-                channels: bool,
-                audio_dir: String,
-                audio_count: Arc<AtomicU32>) {
-    thread::spawn(move || {
-        tracing::info!("Begin Importing Audio");
-        let mut reader = read_dir(Path::new(&audio_dir))
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-        let mut entry = reader.next();
-        //fails if provided dir is empty
-        if entry.is_some() {
-            //begin reading files
-            while entry.is_some() {
-                let file = entry
-                    .unwrap()
-                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                //path() returns the full path of the file
-                let path = file.path();
-                //strip the stored dir from full path
-                let fname = OsString::from(path.clone().strip_prefix(&*audio_dir)
-                    .map_err(|e| DecideError::Component { source: e.into() })
-                    .unwrap().file_stem().unwrap());
-
-                let mut stim_queue = queue.lock()
-                    .map_err(|_e| tracing::error!("Couldn't acquire lock on playlist"))
-                    .unwrap();
-                stim_queue.clear();
-
-                //avoid duplicates
-                if !stim_queue.contains_key(&fname) {
-                    //make sure file is an audio file with "wav" extension
-                    if path.extension().is_some_and(|ext| ext == "wav") {
-                        let wav = audrey::open(path)
-                            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                        let wav_channels = wav.description().channel_count();
-                        let hw_channels = if channels { 2 } else { 1 };
-                        tracing::info!("Importing file {:?}", fname);
-                        let stim = process_audio(wav, wav_channels, hw_channels);
-                        stim_queue.insert(fname.clone(), stim);
-                    }
-                }
-                entry = reader.next();
-            }
-        } else { tracing::info!("Current audio directory is empty!") }
-        tracing::info!("Finished importing audio files");
-        //add number of stims:
-        let length = queue.lock().unwrap()
-            .keys().len() as u32;
-        audio_count.store(length, Ordering::Relaxed);
-        //ref line 117
-        switch.store(0, Ordering::Release);
-        let sw = switch.as_ref();
-        wake_all(sw);
-    }).join().expect("Sound-Alsa: Import Failed!");
+    assert!(!sender.is_closed());
+    sender.blocking_send(message)
+        .map_err(|e| DecideError::Component { source: e.into() })
+        .unwrap();
+    tracing::debug!("AlsaPlayback - state sent");
 }
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
-}
-#[derive(Deserialize)]
-pub struct Config {
-    audio_device: String,
-    sample_rate: u32,
-    channels: u32,
 }

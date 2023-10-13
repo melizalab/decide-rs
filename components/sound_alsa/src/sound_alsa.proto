@@ -8,7 +8,7 @@ message SaState {
 }
 
 message SaParams {
-  string audio_dir = 1;
+  string conf_path = 1;
   uint32 audio_count = 2;
   uint32 sample_rate = 3;
 }
