@@ -215,12 +215,14 @@ impl HouseLight {
     fn calc_altitude(dyson: bool, dawn: f64, dusk: f64, lat: f64, lon: f64) -> f64 {
         if dyson {
             let now = chrono::offset::Local::now();
+            tracing::debug!("Fake Clock specified, time is {:?}", now);
             let now = (now.hour() + (now.minute() / 60) + (now.second() / 3600)) as f64;
             let x: f64 = (now + 24.0 - dawn) % 24.0;
             let y: f64 = (dusk + 24.0 - dawn) % 24.0;
             (x / y) * std::f64::consts::PI
         } else {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            tracing::debug!("Fake Clock not specified, time is {:?}", now);
             sun::pos(now.as_millis() as i64, lat, lon).altitude
         }
     }

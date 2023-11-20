@@ -31,8 +31,8 @@ sha3 = "0.10.6"
 num-traits = "0.2.14"
 tokio-stream = "0.1.8"
 tracing = "0.1.29"
-tracing-subscriber = { version = "0.3.3", features = ['env-filter'] }
+tracing-subscriber = { version = "0.3.3", features = ['env-filter', 'time'] }
 async-trait = "0.1.51"
-
+time = "0.3.20"
 [features]
 dummy-mode = []

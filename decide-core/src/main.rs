@@ -1,9 +1,17 @@
 use anyhow::Context;
 use decide_core::{run, ComponentCollection};
 use tracing_subscriber::filter::EnvFilter;
+use time;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> anyhow::Result<()> {
+    let timer_fmt = time::format_description::parse(
+        "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
+    ).expect(" Setting Timer Format ");
+    let timer_offset = time::UtcOffset::current_local_offset()
+        .unwrap_or_else(|_| time::UtcOffset::UTC);
+    let timer =
+        tracing_subscriber::fmt::time::OffsetTime::new(timer_offset, timer_fmt);
     let filter = EnvFilter::try_from_env("DECIDE_LOG")
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
@@ -11,6 +19,7 @@ async fn main() -> anyhow::Result<()> {
         .pretty()
         .with_thread_names(true)
         .with_env_filter(filter)
+        .with_timer(timer)
         // enable everything
         // sets this to be the default, global collector for this application.
         .init();
