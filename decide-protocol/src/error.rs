@@ -56,6 +56,73 @@ pub enum ClientError {
     WrongAnyProtoType { actual: String, expected: String },
 }
 
+/*#[derive(Error, Debug)]
+pub enum ComponentError {
+    #[error("Failed to open file")]
+    FileAccessError {
+        source: std::io::Error,
+        dir: PathBuf,
+    },
+    #[error("Failed to get chip {chip:?}")]
+    ChipError {
+        source: GpioError,
+        chip: String,
+    },
+    #[error("Failed to get line")]
+    LineGetError {
+        source: GpioError,
+        line: u32,
+    },
+    #[error("Failed to request line")]
+    LineReqError {
+        source: GpioError,
+        line: u32,
+    },
+    #[error("Failed to request event handle for line")]
+    LineReqEvtError {
+        source: GpioError,
+        line: u32,
+    },
+    #[error("Failed to unwrap event for line")]
+    EventReqError {
+        source: GpioError,
+        line: u32,
+    },
+    #[error("Failed to get lines")]
+    LinesGetError {
+        source: GpioError,
+        lines: Vec<u32>,
+    },
+    #[error("Failed to request lines")]
+    LinesReqError {
+        source: GpioError,
+        lines: Vec<u32>,
+    },
+    #[error("Failed to set lines")]
+    LinesSetError {
+        source: GpioError,
+        //lines: &'static Vec<u32>, TODO: find a way to get offsets from a multilinehandle
+    },
+    #[error("Failed to request async event handle")]
+    AsyncEvntReqError {
+        source: GpioError,
+        line: u32,
+    },
+    #[error("Failed to monitor switch lines")]
+    SwitchMonitorError {
+        source: GpioError,
+        lines: Vec<u32>,
+    },
+    #[error("Failed to create PCM stream")]
+    PcmInitErr {
+        dev_name: String,
+    },
+    #[error("Failed to configure PCM stream HW Params")]
+    PcmHwConfigErr {
+        param: String,
+    }
+}*/
+
 #[derive(Error, Debug)]
 pub enum ControllerError {
     #[error("could not determine config directory")]

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+message LedState {
+  string led_state = 1;
+}
+
+message LedParams {
+
+}
+
+message KeyState {
+  bool peck_left = 1;
+  bool peck_center = 2;
+  bool peck_right = 3;
+}
+
+message KeyParams {
+
+}

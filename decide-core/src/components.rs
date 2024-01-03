@@ -1,4 +1,9 @@
 use lights::Lights;
+use house_light::HouseLight;
+use peckboard::{PeckKeys, PeckLeds};
+use stepper_motor::StepperMotor;
+//use sound::AudioPlayer;
+use sound_alsa::AlsaPlayback;
 
 macro_rules! impl_components {
     ($($component:ident),*) => {
@@ -69,7 +74,6 @@ macro_rules! impl_components {
                         async fn init(&mut self, _config: Self::Config) { }
 
                         fn change_state(&mut self, state: Self::State) -> Result<()> {
-                            trace!("changing state");
                             self.state = state.clone();
                             let sender = self.state_sender.clone();
                             tokio::spawn(async move {
@@ -77,7 +81,6 @@ macro_rules! impl_components {
                                     type_url: String::from(Self::STATE_TYPE_URL),
                                     value: state.encode_to_vec()
                                 }).await.map_err(|e| DecideError::Component{ source: e.into() }).unwrap();
-                                trace!("state changed");
                             });
                             Ok(())
                         }
@@ -169,4 +172,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights);
+impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback);

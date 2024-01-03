@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+message SmState {
+  bool running = 2;
+  bool direction = 3;
+}
+
+message SmParams {
+  uint64 timeout = 1;
+}

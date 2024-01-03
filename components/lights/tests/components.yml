@@ -1,4 +1,4 @@
-house-lights:
+lights:
   driver: Lights
   config:
     pin: 4

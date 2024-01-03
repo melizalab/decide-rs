@@ -1,7 +1,12 @@
 [workspace]
+resolver = "2"
 
 members = [
     "decide-protocol",
     "decide-core",
     "components/lights",
+    "components/house_light",
+    "components/stepper_motor",
+    "components/peckboard",
+    "components/sound_alsa",
 ]

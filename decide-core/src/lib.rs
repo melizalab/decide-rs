@@ -14,7 +14,7 @@ All are disabled by default.
 */
 use anyhow::Context as AnyhowContext;
 use decide_protocol::{
-    error::{ClientError, ControllerError, DecideError},
+    error::{ClientError, ControllerError},
     proto, ComponentName,
     ComponentRequest::{self, *},
     GeneralRequest::{self, *},
@@ -27,7 +27,7 @@ use prost_types::Any;
 use prost_types::Timestamp;
 use serde::Deserialize;
 use serde_value::Value;
-use sha3::{Digest, Sha3_256};
+use sha3::{digest::Update, Digest, Sha3_256};
 use std::convert::TryFrom;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, time::Duration};
