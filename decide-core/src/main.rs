@@ -1,5 +1,8 @@
+mod ssdp;
+
 use anyhow::Context;
 use decide_core::{run, ComponentCollection};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::filter::EnvFilter;
 use time;
 
@@ -24,8 +27,20 @@ async fn main() -> anyhow::Result<()> {
         // sets this to be the default, global collector for this application.
         .init();
 
+    let cancel_token = CancellationToken::new();
+    let cloned_token = cancel_token.clone();
+
     let (components, state_stream) =
         ComponentCollection::new().context("could not initialize controller")?;
+
+    let interface: &str = "eth0";  // need to get this from a config file
+    let _ssdp_listener = tokio::spawn(async move { ssdp::listener(interface).await });
+    let _ssdp_notifier = tokio::spawn(async move { ssdp::notifier(interface, cloned_token).await});
+    // TODO - signal notifier to shutdown after ctrl-c, then wait for it to
+    // finish. 
+    // let _ = signal::ctrl_c().await;
+    // cancel_token.cancel();
+    // ssdp_notifier.await.unwrap();
     let res = run::launch_decide(components, state_stream)?;
     res.await
 }
