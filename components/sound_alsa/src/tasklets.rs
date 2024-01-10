@@ -167,6 +167,8 @@ pub fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>
 #[derive(Deserialize)]
 pub struct Config {
     pub audio_device: String,
+    pub card: String,
+    pub volume: u32,
     pub sample_rate: u32,
     pub channels: u32,
 }

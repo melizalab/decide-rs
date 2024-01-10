@@ -83,6 +83,23 @@ impl Component for AlsaPlayback {
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
             tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
             tasklets::get_hw_config(&audio_dev, &config).unwrap();
+
+            let mixer = alsa::mixer::Mixer::new(&config.card.clone(), false)
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            let selem_id = alsa::mixer::SelemId::new("PCM", 0);
+            let selem = mixer.find_selem(&selem_id).ok_or_else(|| {
+                format!(
+                    "Couldn't find selem with name '{}'.",
+                    selem_id.get_name().unwrap_or("unnamed")
+                )
+            }).unwrap();
+            selem.set_playback_volume_range(0, 100)
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            selem.set_playback_volume_all(config.volume as i64)
+                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            drop(mixer);
+            tracing::debug!("AlsaPlayback - volume set to {:?}", config.volume.clone());
+
             // let mut mmap = audio_dev.direct_mmap_playback::<i16>();
             let mut io = audio_dev.io_i16()
                 .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
