@@ -8,8 +8,9 @@ use std::thread;
 use serde_json;
 use alsa::{pcm::{Access, Format, HwParams, PCM, State}};
 use atomic_wait::wake_all;
-use audrey::read::BufFileReader;
+use sndfile;
 use serde::Deserialize;
+use sndfile::{ReadOptions, SndFileIO};
 use walkdir::WalkDir;
 use decide_protocol::error::DecideError;
 
@@ -46,9 +47,9 @@ pub fn import_audio(switch: Arc<AtomicU32>,
                 if !stim_queue.contains_key(&fname) {
                     //make sure file is an audio file with "wav" extension
                     if path.extension().is_some_and(|ext| ext == "wav") {
-                        let wav = audrey::open(path)
-                            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-                        let wav_channels = wav.description().channel_count();
+                        let mut audio_file = sndfile::OpenOptions::ReadOnly(ReadOptions::Auto).from_path(path).unwrap();
+                        let wav: Vec<i16> = audio_file.read_all_to_vec().unwrap();
+                        let wav_channels = audio_file.get_channels();
                         let hw_channels = if channels { 2 } else { 1 };
                         tracing::info!("Importing file {:?}", fname);
                         let stim = process_audio(wav, wav_channels, hw_channels);
@@ -72,32 +73,24 @@ pub fn import_audio(switch: Arc<AtomicU32>,
     }).join().expect("Sound-Alsa: Import Failed!");
 }
 
-pub fn process_audio(mut wav: BufFileReader, wav_channels: u32, hw_channels: u32) -> (Vec<i16>,u32){
+pub fn process_audio(wav: Vec<i16>, wav_channels: usize, hw_channels: u32) -> (Vec<i16>,u32){
     let mut result = Vec::new();
     if wav_channels == 1 {
-        result = wav.frames::<[i16;1]>()
-            .map(Result::unwrap)
-            .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 1.0))
-            .map(|note| note[0])
-            .collect::<Vec<i16>>();
+        result = wav;
         if hw_channels == 2 {
-            result = result.iter()
+            result = result.into_iter()
                 .map(|note| [note, note])
                 .flatten()
-                .map(|f| *f )
-                .collect::<Vec<_>>()
+                .map(|f| f )
+                .collect::<Vec<i16>>()
         }
     } else if wav_channels == 2 {
-        result = wav.frames::<[i16;2]>()
-            .map(Result::unwrap)
-            .map(|file| audrey::dasp_frame::Frame::scale_amp(file, 1.0))
-            .flatten()
-            .collect::<Vec<i16>>();
+        result = wav;
         if hw_channels == 1 {
-            result = result.iter()
+            result = result.into_iter()
                 .enumerate()
                 .filter(|f| f.0.clone() % 2 == 0)
-                .map(|f| *f.1)
+                .map(|f| f.1)
                 .collect::<Vec<_>>()
         }
     };
