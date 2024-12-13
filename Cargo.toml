@@ -9,4 +9,5 @@ members = [
     "components/stepper_motor",
     "components/peckboard",
     "components/sound_alsa",
+    "components/tripwire",
 ]

@@ -134,7 +134,7 @@ impl Component for StepperMotor {
             }
         });
         self.shutdown = Some((motor_handle, shutdown_tx));
-        tracing::info!("Stepper Motor Initiated");
+        tracing::info!("Stepper Motor Initiation Complete");
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {

@@ -1,0 +1,14 @@
+[package]
+name = "linux-embedded-hal-async"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+async-scoped = { version = "0.7.1", features = ["use-tokio"] }
+embedded-hal = "1.0.0-alpha.10"
+embedded-hal-async = "1.0.0"
+futures = "0.3.28"
+i2cdev = "0.6.1"
+nix = { version = "0.29.0", features = ["time"] }
+tokio = { version = "1.12.0", features = ["io-util", "time"] }
+tokio-serial = "5.4.4"

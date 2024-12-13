@@ -1,6 +1,6 @@
 [package]
-name = "peckboard"
-version = "1.0.0"
+name = "tripwire"
+version = "0.9.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -15,9 +15,11 @@ tracing = "0.1.29"
 tokio = { version = "1.12", features = ["full"] }
 async-trait = "0.1.51"
 
-gpio-cdev = {version = "0.5.0", features = ["async-tokio"]}
 thiserror = "1.0.30"
 futures = "0.3.17"
+vl53l4cd = "0.4.0"
+linux-embedded-hal-async = {path = './linux-embedded-hal-async'}
+i2cdev = "0.6.1"
 
 [build-dependencies]
 prost-build = "0.11.1"
