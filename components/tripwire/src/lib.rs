@@ -1,27 +1,29 @@
-use decide_protocol::{Component,
-                      error::DecideError};
+use async_trait::async_trait;
+use atomic_wait::wait;
+use decide_protocol::{error::DecideError,
+                      Component};
+use hal::{delay, i2c};
+use i2cdev::linux::LinuxI2CBus;
+use linux_embedded_hal_async as hal;
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{
-    atomic::{AtomicBool},
+    atomic::AtomicBool,
     Arc,
 };
-use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 use tokio::{
     self, sync::mpsc, task::JoinHandle
 };
-use async_trait::async_trait;
 use vl53l4cd::Vl53l4cd;
-use linux_embedded_hal_async as hal;
-use i2cdev::linux::LinuxI2CBus;
-use hal::{delay, i2c};
 
 pub struct TripWire {
+    polling: Arc<AtomicU32>,
     blocking: Arc<AtomicBool>,
+    timing: Arc<[AtomicU32; 2]>,
     range: Arc<[AtomicU16; 2]>,
     state_sender: mpsc::Sender<Any>,
-    req_sender: Option<mpsc::Sender<[bool; 2]>>,
     shutdown: Option<(JoinHandle<()>,
                       mpsc::Sender<bool>)>
 }
@@ -36,21 +38,27 @@ impl Component for TripWire {
 
     fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self{
         TripWire {
+            polling: Arc::new(AtomicU32::new(0)),
             blocking: Arc::new(AtomicBool::new(false)),
+            timing: Arc::new([
+                AtomicU32::new(config.budget.clamp(10,200)),
+                AtomicU32::new(config.interval)]),
             range: Arc::new([
                 AtomicU16::new(config.min_range),
                 AtomicU16::new(config.max_range)]),
             state_sender,
-            req_sender: None,
             shutdown: None,
         }
     }
 
     async fn init(&mut self, config: Self::Config) {
 
-        let (req_snd, mut req_rcv) = mpsc::channel(20);
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel(2);
-        self.req_sender = Some(req_snd);
+        let sender = self.state_sender.clone();
+
+        let obj_range = Arc::clone(&self.range);
+        let obj_timing = Arc::clone(&self.timing);
+        let obj_polling = Arc::clone(&self.polling);
 
         let trip_handle = tokio::spawn(async move{
             let dev = i2c::LinuxI2c::new(
@@ -61,10 +69,18 @@ impl Component for TripWire {
                 delay::LinuxDelay,
                 vl53l4cd::wait::Poll
             );
+            let range = obj_range.iter()
+                .map(|r| r.load(Ordering::Relaxed))
+                .collect::<Vec<u16>>();
+            let timing = obj_timing.iter()
+                .map(|t| t.load(Ordering::Relaxed))
+                .collect::<Vec<u32>>();
+            let mut blocking = false;
+
             sensor.init().await
                 .map_err(|e| DecideError::Component {source: e.into() })
                 .unwrap();
-            sensor.start_ranging().await
+            sensor.set_range_timing(timing[0], timing[1]).await
                 .map_err(|e| DecideError::Component {source: e.into() })
                 .unwrap();
 
@@ -72,8 +88,43 @@ impl Component for TripWire {
                 if shutdown_rx.try_recv().unwrap_err() == mpsc::error::TryRecvError::Disconnected {
                     break
                 };
-
-
+                wait(&obj_polling, 0);
+                let measure = sensor.measure().await
+                    .map_err(|e| DecideError::Component {source: e.into() })
+                    .unwrap();
+                if measure.is_valid() {
+                    if (measure.distance>range[0])&(measure.distance<range[1])&(!blocking) {
+                        let state = Self::State {
+                            polling: true,
+                            blocking: true,
+                        };
+                        let message = Any {
+                            value: state.encode_to_vec(),
+                            type_url: Self::STATE_TYPE_URL.into(),
+                        };
+                        sender.send(message).await
+                            .map_err(|e| DecideError::Component {
+                                source: e.into()
+                            }).unwrap();
+                        blocking=true
+                    } else if blocking&((measure.distance<range[0])|(measure.distance>range[1])) {
+                        let state = Self::State {
+                            polling: true,
+                            blocking: false,
+                        };
+                        let message = Any {
+                            value: state.encode_to_vec(),
+                            type_url: Self::STATE_TYPE_URL.into(),
+                        };
+                        sender.send(message).await
+                            .map_err(|e| DecideError::Component {
+                                source: e.into()
+                            }).unwrap();
+                        blocking=false
+                    }
+                } else {
+                    tracing::debug!("Invalid measurement.")
+                }
             }
         });
         self.shutdown = Some((trip_handle, shutdown_tx));
@@ -81,23 +132,41 @@ impl Component for TripWire {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
-        todo!()
+        match state.polling {
+            true => { self.polling.store(1, Ordering::Release) }
+            false => { self.polling.store(0, Ordering::Release) }
+        };
+        tracing::info!("TripWire: State Changed by Request");
+        Ok(())
     }
 
-    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
-        todo!()
+    fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
+        tracing::error!("TripWire params is empty. Make sure your script isn't using it without good reason");
+        Ok(())
     }
 
     fn get_state(&self) -> Self::State {
-        todo!()
+        let polling: bool = match self.polling.load(Ordering::Relaxed) {
+            1 => true,
+            0 => false,
+            _ => false,
+        };
+        Self::State {
+            polling,
+            blocking: self.blocking.load(Ordering::Relaxed)
+        }
     }
 
     fn get_parameters(&self) -> Self::Params {
-        todo!()
+        Self::Params {}
     }
 
     async fn shutdown(&mut self) {
-        todo!()
+        tracing::info!("TripWire: Shutdown Called");
+        if let Some((handle, sender)) = self.shutdown.take() {
+            drop(sender);
+            drop(handle);
+        }
     }
 }
 
@@ -109,7 +178,8 @@ pub mod proto {
 pub struct Config {
     i2c_bus: String, // "/dev/i2c-2"
     // addr: u8,
-    trigger_time: u32,
+    budget: u32,
+    interval: u32,
     min_range: u16,
     max_range: u16,
 }
