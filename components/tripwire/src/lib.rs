@@ -8,7 +8,7 @@ use linux_embedded_hal_async as hal;
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::{
     atomic::AtomicBool,
     Arc,
@@ -94,32 +94,16 @@ impl Component for TripWire {
                     .unwrap();
                 if measure.is_valid() {
                     if (measure.distance>range[0])&(measure.distance<range[1])&(!blocking) {
-                        let state = Self::State {
-                            polling: true,
-                            blocking: true,
-                        };
-                        let message = Any {
-                            value: state.encode_to_vec(),
-                            type_url: Self::STATE_TYPE_URL.into(),
-                        };
-                        sender.send(message).await
-                            .map_err(|e| DecideError::Component {
-                                source: e.into()
-                            }).unwrap();
+                        Self::send_state(
+                            &Self::State{polling: true, blocking: true},
+                            &sender
+                        ).await;
                         blocking=true
                     } else if blocking&((measure.distance<range[0])|(measure.distance>range[1])) {
-                        let state = Self::State {
-                            polling: true,
-                            blocking: false,
-                        };
-                        let message = Any {
-                            value: state.encode_to_vec(),
-                            type_url: Self::STATE_TYPE_URL.into(),
-                        };
-                        sender.send(message).await
-                            .map_err(|e| DecideError::Component {
-                                source: e.into()
-                            }).unwrap();
+                        Self::send_state(
+                            &Self::State{polling: true, blocking: false},
+                            &sender
+                        ).await;
                         blocking=false
                     }
                 } else {
@@ -148,7 +132,6 @@ impl Component for TripWire {
     fn get_state(&self) -> Self::State {
         let polling: bool = match self.polling.load(Ordering::Relaxed) {
             1 => true,
-            0 => false,
             _ => false,
         };
         Self::State {
@@ -159,6 +142,14 @@ impl Component for TripWire {
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params {}
+    }
+
+    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
+        tracing::debug!("Emitting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {

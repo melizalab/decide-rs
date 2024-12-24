@@ -79,22 +79,16 @@ impl From<proto::reply::Result> for proto::Reply {
 impl From<Result<proto::reply::Result>> for proto::Reply {
     fn from(result: Result<proto::reply::Result>) -> Self {
         proto::Reply {
-            result: Some(match result {
-                Err(e) => proto::reply::Result::Error(e.to_string()),
-                Ok(r) => r,
-            }),
+            result: Some(result.unwrap_or_else(|e| proto::reply::Result::Error(e.to_string()))),
         }
     }
 }
 
 impl From<Result<proto::Reply>> for proto::Reply {
     fn from(result: Result<proto::Reply>) -> Self {
-        match result {
-            Err(e) => proto::Reply {
-                result: Some(proto::reply::Result::Error(e.to_string())),
-            },
-            Ok(r) => r,
-        }
+        result.unwrap_or_else(|e| proto::Reply {
+            result: Some(proto::reply::Result::Error(e.to_string())),
+        })
     }
 }
 

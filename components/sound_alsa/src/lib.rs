@@ -7,10 +7,11 @@ use std::thread;
 use alsa::{Direction, pcm::PCM};
 use async_trait::async_trait;
 use atomic_wait::{wait, wake_all};
+use futures::executor::block_on;
 use prost::Message;
 use prost_types::Any;
 use tokio::{self, sync::mpsc::Sender as tkSender};
-
+use tokio::sync::mpsc;
 use decide_protocol::{Component,
                       error::DecideError
 };
@@ -130,11 +131,14 @@ impl Component for AlsaPlayback {
                 let frame_count = data.1.clone();
                 frames.store(frame_count.clone(), Ordering::Release);
 
-                Self::send_state(sender.clone(), Self::State {
-                    audio_id: stim_name.clone().into_string().unwrap(),
-                    playback: true,
-                    frame_count: frame_count.clone()
-                });
+                block_on(
+                    Self::send_state(
+                        &Self::State {
+                            audio_id: stim_name.clone().into_string().unwrap(),
+                            playback: true,
+                            frame_count: frame_count.clone() },
+                        &sender
+                ));
                 match audio_dev.prepare() {
                     Ok(n) => n,
                     Err(e) => {
@@ -150,11 +154,13 @@ impl Component for AlsaPlayback {
                 }
                 tracing::info!("Sound-Alsa: Playback Completed!");
                 // playback finished without interruption. Send info about completed stim
-                Self::send_state(sender.clone(), Self::State {
-                    audio_id: stim_name.clone().into_string().unwrap(),
-                    playback: false,
-                    frame_count: frame_count.clone()
-                });
+                block_on(
+                    Self::send_state(&Self::State {
+                        audio_id: stim_name.clone().into_string().unwrap(),
+                        playback: false,
+                        frame_count: frame_count.clone()
+                    }, &sender)
+                );
                 playback.store(0, Ordering::Release);
                 //audio_dev.drop().unwrap();
             }
@@ -242,26 +248,20 @@ impl Component for AlsaPlayback {
         }
     }
 
+    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
+        tracing::debug!("Emiting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    }
+
     async fn shutdown(&mut self) {
         tracing::info!("Sound-Alsa: Shutdown Called");
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
             drop(handle);
         }
-    }
-}
-
-impl AlsaPlayback {
-    fn send_state(sender: tkSender<Any>, state: proto::SaState) {
-        let message = Any {
-            value: state.encode_to_vec(),
-            type_url: Self::STATE_TYPE_URL.into(),
-        };
-        assert!(!sender.is_closed());
-        sender.blocking_send(message)
-            .map_err(|e| DecideError::Component { source: e.into() })
-            .unwrap();
-        tracing::debug!("AlsaPlayback - state sent");
     }
 }
 

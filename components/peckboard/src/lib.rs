@@ -90,14 +90,7 @@ impl Component for PeckLeds {
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
-            sender
-                .send(Any {
-                    type_url: String::from(Self::STATE_TYPE_URL),
-                    value: state.encode_to_vec(),
-                })
-                .await
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+            Self::send_state(&state, &sender).await;
             tracing::info!("PeckLed State Changed by Request");
         });
         Ok(())
@@ -121,6 +114,14 @@ impl Component for PeckLeds {
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params{}
+    }
+
+    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
+        tracing::debug!("Emiting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {
@@ -196,12 +197,7 @@ impl Component for PeckKeys {
                                         peck_center: values[1] != 0,
                                         peck_right: values[0] != 0,
                                     };
-                                    let message = Any {
-                                        value: state.encode_to_vec(),
-                                        type_url: Self::STATE_TYPE_URL.into(),
-                                    };
-                                    sender.send(message).await
-                                        .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                    Self::send_state(&state, &sender).await;
                                 }
                             }
                             EventType::RisingEdge => { continue }
@@ -221,14 +217,7 @@ impl Component for PeckKeys {
 
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
-            sender
-                .send(Any {
-                    type_url: String::from(Self::STATE_TYPE_URL),
-                    value: state.encode_to_vec(),
-                })
-                .await
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+            Self::send_state(&state, &sender).await;
             tracing::info!("PeckKeys State Changed by Request");
         });
         Ok(())
@@ -249,6 +238,14 @@ impl Component for PeckKeys {
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params {}
+    }
+
+    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
+        tracing::debug!("Emiting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {

@@ -62,11 +62,7 @@ impl Component for Lights {
                     let old_state = on.fetch_xor(true, Ordering::AcqRel);
                     let new_state = !old_state;
                     let state = Self::State { on: new_state };
-                    let message = Any {
-                        value: state.encode_to_vec(),
-                        type_url: Self::STATE_TYPE_URL.into(),
-                    };
-                    sender.send(message).await.unwrap();
+                    Self::send_state(&state, &sender).await;
                 }
                 sleep(Duration::from_millis(100)).await;
             }
@@ -77,14 +73,7 @@ impl Component for Lights {
         self.on.store(state.on, Ordering::Release);
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
-            sender
-                .send(Any {
-                    type_url: String::from(Self::STATE_TYPE_URL),
-                    value: state.encode_to_vec(),
-                })
-                .await
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+            Self::send_state(&state, &sender).await;
             trace!("state changed");
         });
         Ok(())
@@ -105,6 +94,14 @@ impl Component for Lights {
         Self::Params {
             blink: self.blink.load(Ordering::Acquire),
         }
+    }
+
+    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
+        tracing::debug!("Emiting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {

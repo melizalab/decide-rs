@@ -35,6 +35,7 @@ impl Component for StepperMotor {
         use std::fs;
         use std::path::Path;
 
+        // This is a mess
         if Path::new("/sys/class/pwm/pwmchip5").exists() {
             if !Path::new("/sys/class/pwm/pwmchip5/pwm0").exists() {
                 fs::write("/sys/class/pwm/pwmchip5/export", "0").expect("Unable to export pwmchip5/pwm0");
@@ -93,7 +94,7 @@ impl Component for StepperMotor {
 
         let running = self.running.clone();
         let direction = self.direction.clone();
-        let mut state_sender = self.state_sender.clone();
+        let state_sender = self.state_sender.clone();
         let timeout = Arc::clone(&self.timeout);
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
         let dt = config.dt;
@@ -112,7 +113,7 @@ impl Component for StepperMotor {
                     running.store(state.running, Ordering::Release);
                     direction.store(state.direction, Ordering::Release);
                     tracing::debug!("sending state");
-                    StepperMotor::send_state(&state, &mut state_sender).await;
+                    Self::send_state(&state, &state_sender).await;
                     tracing::debug!("Running motor with timeout");
                     let timer = Instant::now();
                     while Instant::now().duration_since(timer) <
@@ -126,7 +127,7 @@ impl Component for StepperMotor {
                     running.store(state.running, Ordering::Release);
                     direction.store(state.direction, Ordering::Release);
                     tracing::debug!("sending state");
-                    StepperMotor::send_state(&state, &mut state_sender).await;
+                    Self::send_state(&state, &state_sender).await;
                 } else {
                     tracing::debug!("Motor state poller triggered but not runned.");
                     tokio::time::sleep(Duration::from_micros(dt)).await;
@@ -174,6 +175,14 @@ impl Component for StepperMotor {
         }
     }
 
+    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
+        tracing::debug!("Emiting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    }
+
     async fn shutdown(&mut self) {
         if let Some((motor_handle, sd_tx)) = self.shutdown.take() {
             drop(sd_tx);
@@ -200,24 +209,23 @@ impl StepperMotor {
     ];
 
     fn request_lines(chip: &mut Chip, lines: &[u32]) -> MultiLineHandle {
-        return chip
-            .get_lines(lines)
+        chip.get_lines(lines)
             .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
             .request(LineRequestFlags::OUTPUT, &[0, 0], "decide-rs")
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
     }
 
     fn request_asynclines(chip: &mut Chip, lines: u32) -> AsyncLineEventHandle {
         let line = chip.get_line(lines)
             .map_err(|e| DecideError::Component { source: e.into() })
             .unwrap();
-        return AsyncLineEventHandle::new(
+        AsyncLineEventHandle::new(
             line.events(
                 LineRequestFlags::INPUT,
                 EventRequestFlags::BOTH_EDGES,
                 "decide-rs"
             ).map_err(|e| DecideError::Component { source: e.into() }).unwrap()
-        ).map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        ).map_err(|e| DecideError::Component { source: e.into() }).unwrap()
 
     }
 
@@ -270,7 +278,7 @@ impl StepperMotor {
                 }
             }
         }
-        return state
+        state
     }
 
     fn run_motor(mut step: usize, handle1: &MultiLineHandle, handle3: &MultiLineHandle, direction: bool) -> usize{
@@ -308,15 +316,6 @@ impl StepperMotor {
             .map_err(|e| DecideError::Component { source: e.into() })
             .unwrap();
     }
-
-    async fn send_state(state: &proto::SmState, sender: &mut mpsc::Sender<Any>) {
-        tracing::debug!("Emiting state change");
-        sender.send(Any {
-            type_url: String::from(Self::STATE_TYPE_URL),
-            value: state.encode_to_vec(),
-        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-    }
-
 }
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));

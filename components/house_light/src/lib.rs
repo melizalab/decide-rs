@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
+use thiserror::Error;
 use tokio::{self,
             sync::mpsc::Sender,
             time::{Duration, sleep}
@@ -44,7 +45,7 @@ impl Component for HouseLight {
             brightness: Arc::new(AtomicU8::new(0)),
             daytime: Arc::new(AtomicBool::new(false)),
             interval: 300,
-            config: config,
+            config,
             state_sender,
             task_handle: None,
         }
@@ -67,19 +68,11 @@ impl Component for HouseLight {
                     let bt = brightness.load(Ordering::Acquire);
                     let dt = bt > 0;
                     tracing::debug!("Currently in manual mode, no need to adjust brightness");
-                    let state = Self::State {
-                        manual: true,
-                        dyson: false,
-                        brightness: bt as i32,
-                        daytime: dt
-                    };
-                    let message = Any {
-                        value: state.encode_to_vec(),
-                        type_url: Self::STATE_TYPE_URL.into(),
-                    };
-                    sender.send(message).await
-                        .map_err(|e| DecideError::Component { source: e.into() })
-                        .unwrap();
+                    Self::send_state(
+                        &Self::State{ manual: true, dyson: false,
+                                           brightness: bt as i32, daytime: dt },
+                        &sender
+                    ).await;
                 } else {
 
                     let dyson  = fake_sun.load(Ordering::Relaxed);
@@ -97,20 +90,11 @@ impl Component for HouseLight {
                     fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
                     tracing::info!("House-Light Brightness Set to {:?} ", new_brightness);
                     brightness.store(new_brightness, Ordering::Relaxed);
-
-                    let state = Self::State {
-                        manual: false,
-                        dyson,
-                        brightness: new_brightness as i32,
-                        daytime: dt
-                    };
-                    let message = Any {
-                        value: state.encode_to_vec(),
-                        type_url: Self::STATE_TYPE_URL.into(),
-                    };
-                    sender.send(message).await
-                        .map_err(|e| DecideError::Component { source: e.into() })
-                        .unwrap();
+                    Self::send_state(
+                        &Self::State{ manual: false, dyson,
+                            brightness: new_brightness as i32, daytime: dt },
+                        &sender
+                    ).await;
                 }
                 sleep(Duration::from_secs(interval)).await;
             }
@@ -158,14 +142,7 @@ impl Component for HouseLight {
             daytime: self.daytime.load(Ordering::Relaxed)
         };
         tokio::spawn(async move {
-            sender
-                .send(Any {
-                    type_url: String::from(Self::STATE_TYPE_URL),
-                    value: new_state.encode_to_vec(),
-                })
-                .await
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+            Self::send_state(&new_state, &sender).await;
             tracing::debug!("House-Light State Changed by Request");
         });
 
@@ -192,6 +169,14 @@ impl Component for HouseLight {
         }
     }
 
+    async fn send_state(state: &Self::State, sender: &Sender<Any>) {
+        tracing::debug!("Emiting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+    }
+
     async fn shutdown(&mut self) {
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
@@ -214,7 +199,7 @@ impl HouseLight {
     }
     fn calc_altitude(dyson: bool, dawn: f64, dusk: f64, lat: f64, lon: f64) -> f64 {
         if dyson {
-            let now = chrono::offset::Local::now();
+            let now = Local::now();
             tracing::debug!("Fake Clock specified, time is {:?}", now);
             let now = (now.hour() + (now.minute() / 60) + (now.second() / 3600)) as f64;
             let x: f64 = (now + 24.0 - dawn) % 24.0;
@@ -237,4 +222,8 @@ pub struct Config {
     lon: f64,
     //period: u32,
     max_brightness: u8 //255
+}
+
+#[derive(Error, Debug)]
+pub enum HouseLightError {
 }

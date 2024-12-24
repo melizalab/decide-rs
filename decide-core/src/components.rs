@@ -98,6 +98,12 @@ macro_rules! impl_components {
                             self.state.clone()
                         }
 
+                        // Generic method for emitting state change from within thread
+                        async fn send_state(
+                            state: Self::State,
+                            sender: &mpsc::Sender<Any>
+                        ) {}
+
                         async fn shutdown(&mut self) {}
                     }
                     )*

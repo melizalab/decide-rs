@@ -10,7 +10,7 @@ decide-protocol = { path = "../../decide-protocol" }
 prost = "0.11.0"
 prost-types = "0.11.1"
 serde = { version = "1.0", features = ["derive"] }
-
+thiserror = "1.0"
 tracing = "0.1.29"
 
 tokio = { version = "1.12", features = ["full"] }
