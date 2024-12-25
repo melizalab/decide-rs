@@ -86,8 +86,16 @@ impl Component for HouseLight {
                     daytime.store(dt, Ordering::Release);
 
                     //let duty = HouseLight::get_duty(period, new_brightness);
-                    let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
-                    fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
+                    let path = fs::canonicalize(PathBuf::from(dev_path.clone()))
+                        .map_err(|_e| DecideError::Component {
+                            source: HouseLightError::InvalidFs {
+                                requested: dev_path.clone()}.into()
+                        }).unwrap();
+                    fs::write(path.clone(), new_brightness.to_string())
+                        .map_err(|_e| DecideError::Component {
+                            source: HouseLightError::WriteError {
+                                path, value: new_brightness.to_string() }.into()
+                        }).unwrap();
                     tracing::info!("House-Light Brightness Set to {:?} ", new_brightness);
                     brightness.store(new_brightness, Ordering::Relaxed);
                     Self::send_state(
@@ -111,12 +119,20 @@ impl Component for HouseLight {
         // Change brightness immediately
         let new_brightness = if state.manual {
             let new_brightness = state.brightness as u8;
-            //let duty = HouseLight::get_duty(self.period, new_brightness);
-            fs::write(dev_path, new_brightness.to_string())
-                .expect("Unable to write brightness");
+            let path = fs::canonicalize(PathBuf::from(dev_path.clone()))
+                .map_err(|_e| DecideError::Component {
+                    source: HouseLightError::InvalidFs {
+                        requested: dev_path.clone()}.into()
+                })?;
+            fs::write(path.clone(), new_brightness.to_string())
+                .map_err(|_e| DecideError::Component {
+                    source: HouseLightError::WriteError {
+                        path, value: new_brightness.to_string() }.into()
+                })?;
             tracing::info!("House-Light Brightness Set to {:?} Manually", new_brightness);
             self.brightness.store(new_brightness, Ordering::Relaxed);
 	    new_brightness
+
         } else {
             let d  = self.dyson.load(Ordering::Relaxed);
             let altitude = HouseLight::calc_altitude(d,
@@ -127,9 +143,17 @@ impl Component for HouseLight {
             let new_brightness = HouseLight::calc_brightness(altitude, self.config.max_brightness);
             let dt = new_brightness > 0;
             self.daytime.store(dt, Ordering::Release);
-            //let duty = HouseLight::get_duty(period, new_brightness);
-            let path = fs::canonicalize(PathBuf::from(dev_path.clone())).unwrap();
-            fs::write(path, new_brightness.to_string()).expect("Unable to write brightness");
+
+            let path = fs::canonicalize(PathBuf::from(dev_path.clone()))
+                .map_err(|_e| DecideError::Component {
+                    source: HouseLightError::InvalidFs {
+                        requested: dev_path.clone()}.into()
+                })?;
+            fs::write(path.clone(), new_brightness.to_string())
+                .map_err(|_e| DecideError::Component {
+                    source: HouseLightError::WriteError {
+                        path, value: new_brightness.to_string() }.into()
+                })?;
             tracing::info!("House-Light Brightness Set to {:?} ", new_brightness);
             self.brightness.store(new_brightness, Ordering::Relaxed);
 	    new_brightness
@@ -170,27 +194,24 @@ impl Component for HouseLight {
     }
 
     async fn send_state(state: &Self::State, sender: &Sender<Any>) {
-        tracing::debug!("Emiting state change");
+        tracing::debug!("Emitting state change");
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
-        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        }).await.map_err(|_e| DecideError::Component {
+            source: HouseLightError::SendError.into()
+        }).unwrap();
     }
 
     async fn shutdown(&mut self) {
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
-            task_handle.await
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap_err();
+            assert!(task_handle.await.unwrap_err().is_cancelled());
         }
     }
 }
 
 impl HouseLight {
-    //fn get_duty(period: u32, brightness: u8) -> String {
-    //    (period * (brightness as u32)/100).to_string()
-    //}
 
     fn calc_brightness(altitude: f64, max_brightness: u8) -> u8 {
         let x = (altitude.sin() * (max_brightness as f64)).round() as u8;
@@ -206,7 +227,10 @@ impl HouseLight {
             let y: f64 = (dusk + 24.0 - dawn) % 24.0;
             (x / y) * std::f64::consts::PI
         } else {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)
+                .map_err(|_e| DecideError::Component {
+                    source: HouseLightError::SysTimeError.into()
+                }).unwrap();
             tracing::debug!("Fake Clock not specified, time is {:?}", now);
             sun::pos(now.as_millis() as i64, lat, lon).altitude
         }
@@ -220,10 +244,17 @@ pub struct Config {
     fake_dusk: f64,
     lat: f64,
     lon: f64,
-    //period: u32,
     max_brightness: u8 //255
 }
 
 #[derive(Error, Debug)]
 pub enum HouseLightError {
+    #[error("could not find file for writing brightness value: {requested:?}")]
+    InvalidFs{requested: String},
+    #[error("could not write value {value:?} to file {path:?}")]
+    WriteError{path: PathBuf, value: String},
+    #[error("could not send state change")]
+    SendError,
+    #[error("could not acquire Unix-Epoch time from system")]
+    SysTimeError
 }

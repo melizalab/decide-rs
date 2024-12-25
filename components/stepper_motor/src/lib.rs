@@ -10,8 +10,10 @@ use gpio_cdev::{AsyncLineEventHandle, Chip,
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
+use thiserror::Error;
 use tokio::{self, time::Duration, sync::mpsc};
 use decide_protocol::{Component, error::DecideError};
+
 
 pub struct StepperMotor {
     running: Arc<AtomicBool>,
@@ -36,35 +38,23 @@ impl Component for StepperMotor {
         use std::path::Path;
 
         // This is a mess
-        if Path::new("/sys/class/pwm/pwmchip5").exists() {
-            if !Path::new("/sys/class/pwm/pwmchip5/pwm0").exists() {
-                fs::write("/sys/class/pwm/pwmchip5/export", "0").expect("Unable to export pwmchip5/pwm0");
+        let chip_address: &str = if Path::new("/sys/class/pwm/pwmchip5").exists() { "pwmchip5" }
+                                                                                else { "pwmchip0" };
+        for pwm_address in ["0", "1"] {
+            if !Path::new(&format!("/sys/class/pwm/{}/pwm{}", chip_address, pwm_address)).exists() {
+                let export_loc = format!("/sys/class/pwm/{}/export", chip_address);
+                fs::write(export_loc.clone(), pwm_address).map_err(|_e| DecideError::Component { source:
+                    StepperMotorError::WriteError { path: export_loc, value: pwm_address.to_string() }.into()
+                }).unwrap()
             }
-            if !Path::new("/sys/class/pwm/pwmchip5/pwm1").exists() {
-                fs::write("/sys/class/pwm/pwmchip5/export", "1").expect("Unable to export pwmchip5/pwm1");
+            let configs = vec!["period", "1000", "duty_cycle", "6500", "enable", "1"];
+            for pair in configs.chunks(2) {
+                let write_loc = format!("/sys/class/pwm/{}/pwm{}/{}",
+                                        chip_address, pwm_address, pair[0]);
+                fs::write(write_loc.clone(), pair[1]).map_err(|_e| DecideError::Component { source:
+                    StepperMotorError::WriteError { path: write_loc, value: pair[1].to_string() }.into()
+                }).unwrap()
             }
-            fs::write("/sys/class/pwm/pwmchip5/pwm0/period", "10000").expect("Unable to write to pwm0 period");
-            fs::write("/sys/class/pwm/pwmchip5/pwm1/period", "10000").expect("Unable to write to pwm1 period");
-            fs::write("/sys/class/pwm/pwmchip5/pwm0/duty_cycle", "6500").expect("Unable to write to pwm0 duty_cycle");
-            fs::write("/sys/class/pwm/pwmchip5/pwm1/duty_cycle", "6500").expect("Unable to write to pwm1 duty_cycle");
-            fs::write("/sys/class/pwm/pwmchip5/pwm0/enable", "1").expect("Unable to write to pwm0 enable");
-            fs::write("/sys/class/pwm/pwmchip5/pwm1/enable", "1").expect("Unable to write to pwm1 enable");
-        } else if Path::new("/sys/class/pwm/pwmchip0").exists() {
-            if !Path::new("/sys/class/pwm/pwmchip0/pwm0").exists() {
-                fs::write("/sys/class/pwm/pwmchip0/export", "0").expect("Unable to export pwmchip0/pwm0");
-            }
-            if !Path::new("/sys/class/pwm/pwmchip0/pwm1").exists() {
-                fs::write("/sys/class/pwm/pwmchip0/export", "1").expect("Unable to export pwmchip0/pwm1");
-            }
-            fs::write("/sys/class/pwm/pwmchip0/pwm0/period", "10000").expect("Unable to write to pwm0 period");
-            fs::write("/sys/class/pwm/pwmchip0/pwm1/period", "10000").expect("Unable to write to pwm1 period");
-            fs::write("/sys/class/pwm/pwmchip0/pwm0/duty_cycle", "6500").expect("Unable to write to pwm0 duty_cycle");
-            fs::write("/sys/class/pwm/pwmchip0/pwm1/duty_cycle", "6500").expect("Unable to write to pwm1 duty_cycle");
-            fs::write("/sys/class/pwm/pwmchip0/pwm0/enable", "1").expect("Unable to write to pwm0 enable");
-            fs::write("/sys/class/pwm/pwmchip0/pwm1/enable", "1").expect("Unable to write to pwm1 enable");
-        } else {
-            tracing::error!("Found neither pwmchip0 nor pwmchip5 for stepper motor");
-            panic!("stepper motor pwmchip not found :(")
         }
 
         StepperMotor {
@@ -82,11 +72,13 @@ impl Component for StepperMotor {
         let (req_snd, mut req_rcv) = mpsc::channel(20);
         self.req_sender = Some(req_snd);
         let mut chip1 = Chip::new(config.chip1.clone())
-            .map_err(|e| DecideError::Component { source: e.into() })
-            .unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioChipError {dev: config.chip1.clone()}.into()
+            }).unwrap();
         let mut chip3 = Chip::new(config.chip3.clone())
-            .map_err(|e| DecideError::Component { source: e.into() })
-            .unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioChipError {dev: config.chip3.clone()}.into()
+            }).unwrap();
         let motor_1_handle = StepperMotor::request_lines(&mut chip1, &config.motor1_offsets);
         let motor_3_handle = StepperMotor::request_lines(&mut chip3, &config.motor3_offsets);
         let mut switch_14 = StepperMotor::request_asynclines(&mut chip1, config.switch_offsets[0]);
@@ -138,6 +130,7 @@ impl Component for StepperMotor {
         tracing::info!("Stepper Motor Initiation Complete");
     }
 
+    //noinspection RsUnwrap
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         self.direction.store(state.direction, Ordering::Release);
         self.running.store(state.running, Ordering::Release);
@@ -149,7 +142,7 @@ impl Component for StepperMotor {
                     .unwrap()
                     .send([state.running, state.direction])
                     .await
-                    .map_err(|e| DecideError::Component { source: e.into() })
+                    .map_err(|_e| DecideError::Component { source: StepperMotorError::SendError.into() })
                     .unwrap();
             });
         }
@@ -180,7 +173,8 @@ impl Component for StepperMotor {
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
-        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        }).await.map_err(|_e| DecideError::Component { source:
+            StepperMotorError::SendError.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {
@@ -210,22 +204,33 @@ impl StepperMotor {
 
     fn request_lines(chip: &mut Chip, lines: &[u32]) -> MultiLineHandle {
         chip.get_lines(lines)
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
+            .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioLineReqError { line: Vec::from(lines) }.into()
+            }).unwrap()
             .request(LineRequestFlags::OUTPUT, &[0, 0], "decide-rs")
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
+            .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioFlagReqError {line: Vec::from(lines),
+                                                     flag: "OUTPUT".to_string()}.into()
+            }).unwrap()
     }
 
     fn request_asynclines(chip: &mut Chip, lines: u32) -> AsyncLineEventHandle {
         let line = chip.get_line(lines)
-            .map_err(|e| DecideError::Component { source: e.into() })
-            .unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioLineReqError {line: vec![lines]}.into()
+            }).unwrap();
         AsyncLineEventHandle::new(
             line.events(
                 LineRequestFlags::INPUT,
                 EventRequestFlags::BOTH_EDGES,
                 "decide-rs"
-            ).map_err(|e| DecideError::Component { source: e.into() }).unwrap()
-        ).map_err(|e| DecideError::Component { source: e.into() }).unwrap()
+            ).map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioFlagReqError {line: vec![lines],
+                                                     flag: "INPUT".to_string()}.into()
+            }).unwrap()
+        ).map_err(|_e| DecideError::Component { source:
+            StepperMotorError::GpioAsyncLineError { line: vec![lines as u8] }.into()
+        }).unwrap()
 
     }
 
@@ -236,8 +241,8 @@ impl StepperMotor {
         tokio::select! {
 
             Some(event) = sw14.next() => {
-                let evt_type = event.map_err(|e| DecideError::Component { source: e.into() })
-                                    .unwrap().event_type();
+                let evt_type = event.map_err(|_e| DecideError::Component { source:
+                    StepperMotorError::GpioAsyncEventError.into() }).unwrap().event_type();
                 match evt_type {
                     EventType::RisingEdge => {
                         tracing::info!("Motor Switch 14 Pressed");
@@ -253,8 +258,8 @@ impl StepperMotor {
                 }
             }
             Some(event) = sw15.next() => {
-                let evt_type = event.map_err(|e| DecideError::Component { source: e.into() })
-                                    .unwrap().event_type();
+                let evt_type = event.map_err(|_e| DecideError::Component { source:
+                    StepperMotorError::GpioAsyncEventError.into() }).unwrap().event_type();
                 match evt_type {
                     EventType::RisingEdge => {
                         tracing::debug!("Motor Switch 15 Pressed");
@@ -287,21 +292,25 @@ impl StepperMotor {
             let step_1_values = &Self::HALF_STEPS[step].0;
             let step_3_values = &Self::HALF_STEPS[step].1;
             handle1.set_values(&step_1_values.0)
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    StepperMotorError::GpioLineSetError { value: Vec::from(step_1_values.0) }.into()
+                }).unwrap();
             handle3.set_values(&step_3_values.0)
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioLineSetError { value: Vec::from(step_3_values.0) }.into()
+                }).unwrap();
         } else {
             step = (step - 1) % Self::NUM_HALF_STEPS;
             let step_1_values = &Self::HALF_STEPS[step].0;
             let step_3_values = &Self::HALF_STEPS[step].1;
             handle1.set_values(&step_1_values.0)
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    StepperMotorError::GpioLineSetError { value: Vec::from(step_1_values.0) }.into()
+                }).unwrap();
             handle3.set_values(&step_3_values.0)
-                .map_err(|e| DecideError::Component { source: e.into() })
-                .unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    StepperMotorError::GpioLineSetError { value: Vec::from(step_3_values.0) }.into()
+                }).unwrap();
         }
         step
     }
@@ -310,13 +319,16 @@ impl StepperMotor {
         let step_1_values = &Self::ALL_OFF;
         let step_3_values = &Self::ALL_OFF;
         handle1.set_values(&step_1_values.0)
-            .map_err(|e| DecideError::Component { source: e.into() })
-            .unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioLineSetError { value: Vec::from(step_1_values.0) }.into()
+            }).unwrap();
         handle3.set_values(&step_3_values.0)
-            .map_err(|e| DecideError::Component { source: e.into() })
-            .unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                StepperMotorError::GpioLineSetError { value: Vec::from(step_3_values.0) }.into()
+            }).unwrap();
     }
 }
+
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/_.rs"));
 }
@@ -329,4 +341,24 @@ pub struct Config {
     motor1_offsets: [u32; 2], //13, 12
     motor3_offsets: [u32; 2], //19,21
     dt: u64, //2000
+}
+
+#[derive(Error, Debug)]
+pub enum StepperMotorError {
+    #[error("could not write value {value:?} to file {path:?}")]
+    WriteError{path: String, value: String},
+    #[error("could not initialize gpio device {dev:?}")]
+    GpioChipError{dev:String},
+    #[error("could not request lines {line:?} from gpio device")]
+    GpioLineReqError{line: Vec<u32>},
+    #[error("could not set gpio lines {line:?} to mode {flag:?}")]
+    GpioFlagReqError{line: Vec<u32>, flag: String},
+    #[error("could not set gpio line to values {value:?}")]
+    GpioLineSetError{value: Vec<u8>},
+    #[error("could not get async handle for gpio line {line:?}")]
+    GpioAsyncLineError{line: Vec<u8>},
+    #[error("could not get async event")]
+    GpioAsyncEventError,
+    #[error("could not send state update")]
+    SendError,
 }

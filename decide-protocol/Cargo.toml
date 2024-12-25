@@ -11,7 +11,7 @@ anyhow = "1.0"
 prost = "0.11.1"
 bytes = "1.2.1"
 prost-types = "0.11.1"
-thiserror = "1.0"
+thiserror = "2.0.9"
 num-derive = "0.3.3"
 num-traits = "0.2.14"
 tmq = { version = "0.3", features = ["zmq-vendored"] }

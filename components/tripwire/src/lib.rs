@@ -13,6 +13,7 @@ use std::sync::{
     atomic::AtomicBool,
     Arc,
 };
+use thiserror::Error;
 use tokio::{
     self, sync::mpsc, task::JoinHandle
 };
@@ -62,7 +63,10 @@ impl Component for TripWire {
 
         let trip_handle = tokio::spawn(async move{
             let dev = i2c::LinuxI2c::new(
-                LinuxI2CBus::new(config.i2c_bus).unwrap()
+                LinuxI2CBus::new(config.i2c_bus.clone())
+                    .map_err(|_e| DecideError::Component { source:
+                        TripWireError::InvalidFs{path: config.i2c_bus.clone()}.into()
+                    }).unwrap()
             );
             let mut sensor = Vl53l4cd::new(
                 dev,
@@ -78,10 +82,12 @@ impl Component for TripWire {
             let mut blocking = false;
 
             sensor.init().await
-                .map_err(|e| DecideError::Component {source: e.into() })
+                .map_err(|_e| DecideError::Component {source:
+                    TripWireError::I2CError {tag:"init".to_string()}.into() })
                 .unwrap();
             sensor.set_range_timing(timing[0], timing[1]).await
-                .map_err(|e| DecideError::Component {source: e.into() })
+                .map_err(|_e| DecideError::Component {source:
+                    TripWireError::I2CError {tag:"set_range_timing".to_string()}.into() })
                 .unwrap();
 
             loop {
@@ -90,7 +96,8 @@ impl Component for TripWire {
                 };
                 wait(&obj_polling, 0);
                 let measure = sensor.measure().await
-                    .map_err(|e| DecideError::Component {source: e.into() })
+                    .map_err(|_e| DecideError::Component {source:
+                        TripWireError::I2CError {tag: "measure".to_string()}.into() })
                     .unwrap();
                 if measure.is_valid() {
                     if (measure.distance>range[0])&(measure.distance<range[1])&(!blocking) {
@@ -149,14 +156,16 @@ impl Component for TripWire {
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
-        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        }).await.map_err(|_e| DecideError::Component { source:
+            TripWireError::SendError.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {
         tracing::info!("TripWire: Shutdown Called");
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
-            drop(handle);
+            handle.abort();
+            handle.await.unwrap_err();
         }
     }
 }
@@ -173,4 +182,14 @@ pub struct Config {
     interval: u32,
     min_range: u16,
     max_range: u16,
+}
+
+#[derive(Error, Debug)]
+pub enum TripWireError {
+    #[error("could not access file {path:?}")]
+    InvalidFs{path: String},
+    #[error("error accessing I2C device for {tag:?}")]
+    I2CError{tag: String},
+    #[error("could not send state update")]
+    SendError,
 }

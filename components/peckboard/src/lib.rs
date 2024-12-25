@@ -1,39 +1,41 @@
-use gpio_cdev::{Chip, AsyncLineEventHandle,
-                LineRequestFlags,
-                MultiLineHandle,
-                EventRequestFlags,
-                EventType
-                //errors::Error as GpioError
-};
-use futures::stream::StreamExt;
-use tokio::sync::mpsc::Sender;
+use crate::PeckBoardError::{GpioAsyncLineError, GpioChipError, GpioFlagReqError, GpioLineGetError, GpioLineReqError, GpioLineSetError, SendError};
 use async_trait::async_trait;
-use decide_protocol::{Component,
-                   error::DecideError};
+use decide_protocol::{error::DecideError,
+                      Component};
+use futures::stream::StreamExt;
+use gpio_cdev::{AsyncLineEventHandle, Chip,
+                EventRequestFlags,
+                EventType,
+                LineRequestFlags,
+                MultiLineHandle
+};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{
-    atomic::{AtomicBool,// Ordering
-    },
+    atomic::AtomicBool,
     Arc,
 };
-use std::sync::atomic::Ordering;
+use std::time::Duration;
+use thiserror::Error;
+use tokio::sync::mpsc::Sender;
 use tokio::{
-    self, sync::mpsc, task::JoinHandle
+    self, task::JoinHandle
 };
 
 pub struct PeckLeds {
     handles: MultiLineHandle,
     led_state: LedColor,
-    state_sender: mpsc::Sender<Any>,
+    state_sender: Sender<Any>,
 }
 
 pub struct PeckKeys {
     peck_left: Arc<AtomicBool>,
     peck_center: Arc<AtomicBool>,
     peck_right: Arc<AtomicBool>,
-    state_sender: mpsc::Sender<Any>,
+    state_sender: Sender<Any>,
     task_handle: Option<JoinHandle<()>>,
 }
 
@@ -52,19 +54,32 @@ impl Component for PeckLeds {
         use std::thread;
 
         if !Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists() {
-            let sysfs_chip = fs::canonicalize(
-                PathBuf::from("/sys/class/i2c-adapter/i2c-1/new_device")).unwrap();
-            fs::write(sysfs_chip, "pcf8575 0x20").expect("Unable to write to i2c-adapter for peckboard");
+            let chip_path = String::from("/sys/class/i2c-adapter/i2c-1/new_device");
+            let sysfs_chip = fs::canonicalize(PathBuf::from(chip_path.clone()))
+                .map_err(|_e| DecideError::Component { source:
+                    PeckBoardError::InvalidFs { requested: chip_path}.into()})
+                .unwrap();
+            fs::write(sysfs_chip.clone(), "pcf8575 0x20")
+                .map_err(|_e| DecideError::Component { source:
+                    PeckBoardError::WriteError { path: sysfs_chip,
+                                                 value: "pcf8575 0x20".to_string()}.into()})
+                .unwrap();
             tracing::debug!("Peckboard Chip Initiated");
             assert!(Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists());
         }
         thread::sleep(Duration::from_secs(2));
         let mut chip4 = Chip::new(config.peckboard_chip.clone())
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                PeckBoardError::GpioChipError {dev: config.peckboard_chip}.into()
+            }).unwrap();
         let handles = chip4.get_lines(&config.led_offsets.clone())
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
+            .map_err(|_e| DecideError::Component { source:
+                GpioLineReqError {line: config.led_offsets.clone()}.into()
+            }).unwrap()
             .request(LineRequestFlags::OUTPUT, &[0,0,0], "PeckLeds")
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                GpioFlagReqError {line: config.led_offsets.clone(), flag:"OUT".to_string()}.into()
+            }).unwrap();
         PeckLeds {
             handles,
             led_state: LedColor::Off,
@@ -87,7 +102,9 @@ impl Component for PeckLeds {
         }
         let lines_value = self.led_state.as_value();
         self.handles.set_values(&lines_value)
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                PeckBoardError::GpioLineSetError {value: Vec::from(lines_value) }.into()
+            })?;
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
             Self::send_state(&state, &sender).await;
@@ -116,18 +133,17 @@ impl Component for PeckLeds {
         Self::Params{}
     }
 
-    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
+    async fn send_state(state: &Self::State, sender: &Sender<Any>) {
         tracing::debug!("Emiting state change");
-        sender.send(Any {
-            type_url: String::from(Self::STATE_TYPE_URL),
-            value: state.encode_to_vec(),
-        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        Self::send_state(&state, &sender).await
     }
 
     async fn shutdown(&mut self) {
         tracing::debug!("Shutdown called for PeckLed");
         self.handles.set_values(&LedColor::Off.as_value())
-            .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+            .map_err(|_e| DecideError::Component { source:
+                GpioLineSetError {value: Vec::from(&LedColor::Off.as_value()) }.into() })
+            .unwrap();
     }
 }
 
@@ -154,31 +170,51 @@ impl Component for PeckKeys {
 
         self.task_handle = Some(tokio::spawn(async move {
             let mut chip2 = Chip::new(&config.interrupt_chip)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    GpioChipError { dev: config.interrupt_chip }.into()
+                }).unwrap();
             let interrupt_offset = chip2.get_line(config.interrupt_offset.clone())
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
-            let mut interrupt = AsyncLineEventHandle::new(interrupt_offset.events(
-                LineRequestFlags::INPUT,
-                EventRequestFlags::BOTH_EDGES, // we're interested in capturing FALLING_EDGE
-                "Peckboard_Interrupt"          // but oddly setting flags to FALLING_EDGE still
-            ).unwrap())                         // gives us both edges.
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    GpioLineReqError {line: vec![config.interrupt_offset]}.into()
+                }).unwrap();
+            let mut interrupt = AsyncLineEventHandle::new(
+                interrupt_offset.events(LineRequestFlags::INPUT,
+                                        EventRequestFlags::BOTH_EDGES,      // we're interested in capturing FALLING_EDGE
+                                        "Peckboard_Interrupt"     // but oddly setting flags to FALLING_EDGE still
+                                        )             // gives us both edges.
+                    .map_err(|_e| DecideError::Component {source:
+                        GpioFlagReqError {line: vec![config.interrupt_offset],
+                                          flag: "INPUT".to_string()}.into() })
+                    .unwrap())
+                .map_err(|_e| DecideError::Component { source:
+                    GpioAsyncLineError {line: vec![config.interrupt_offset as u8]}.into()})
+                .unwrap();
 
-            let mut chip4 = loop {
-                let chip_result = Chip::new(config.peckboard_chip.clone());
-                match chip_result {
-                    Ok(chip4) => {break chip4}
-                    Err(_) => {continue}
-                }
-            };
+            while !Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists() {
+                tokio::time::sleep(Duration::from_secs(1)).await
+            }
+            let mut chip4 = Chip::new(&config.peckboard_chip)
+                .map_err(|_e| DecideError::Component { source:
+                GpioChipError { dev: config.peckboard_chip }.into()
+                }).unwrap();
             chip4.get_lines(&config.ir_offsets)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
+                .map_err(|_e| DecideError::Component { source:
+                    GpioLineReqError {line: config.ir_offsets.clone()}.into()})
+                .unwrap()
                 .request(LineRequestFlags::OUTPUT, &[1,1,1], "peckboard_ir")
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    GpioFlagReqError {line: config.ir_offsets.clone(),
+                                      flag: "OUTPUT".to_string()}.into() })
+                .unwrap();
             let key_handles: MultiLineHandle = chip4.get_lines(&config.key_offsets)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap()
+                .map_err(|_e| DecideError::Component { source:
+                    GpioLineReqError {line: config.key_offsets.clone()}.into() })
+                .unwrap()
                 .request(LineRequestFlags::INPUT, &[0,0,0], "peck_keys")
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    GpioFlagReqError {line: config.key_offsets.clone(),
+                                      flag: "INPUT".to_string()}.into() })
+                .unwrap();
 
             loop {
                 match interrupt.next().await {
@@ -186,7 +222,9 @@ impl Component for PeckKeys {
                         match event.unwrap().event_type() {
                             EventType::FallingEdge => {
                                 let values = key_handles.get_values()
-                                    .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                                    .map_err(|_e| DecideError::Component { source:
+                                        GpioLineGetError.into() })
+                                    .unwrap();
                                 let first = values[0];
                                 if values.iter().all(|&i| i == first) {
                                     continue
@@ -240,20 +278,21 @@ impl Component for PeckKeys {
         Self::Params {}
     }
 
-    async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
-        tracing::debug!("Emiting state change");
+    async fn send_state(state: &Self::State, sender: &Sender<Any>) {
+        tracing::debug!("Emitting state change");
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
-        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        }).await.map_err(|_e| DecideError::Component { source:
+                SendError.into() })
+            .unwrap();
     }
 
     async fn shutdown(&mut self) {
         tracing::debug!("Shutdown called for PeckKeys");
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
-            task_handle.await
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap_err();
+            assert!(task_handle.await.unwrap_err().is_cancelled());
         }
     }
 }
@@ -306,4 +345,26 @@ impl LedColor {
             LedColor::White => {[1,1,1]}
         }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum PeckBoardError {
+    #[error("could not find file for writing brightness value: {requested:?}")]
+    InvalidFs{requested: String},
+    #[error("could not write value {value:?} to file {path:?}")]
+    WriteError{path: PathBuf, value: String},
+    #[error("could not initialize gpio device {dev:?}")]
+    GpioChipError{dev:String},
+    #[error("could not request lines {line:?} from gpio device")]
+    GpioLineReqError{line: Vec<u32>},
+    #[error("could not set gpio lines {line:?} to mode {flag:?}")]
+    GpioFlagReqError{line: Vec<u32>, flag: String},
+    #[error("could not set gpio line to values {value:?}")]
+    GpioLineSetError{value: Vec<u8>},
+    #[error("could not get gpio line value")]
+    GpioLineGetError,
+    #[error("could not get async handle for gpio line {line:?}")]
+    GpioAsyncLineError{line: Vec<u8>},
+    #[error("could not send state update")]
+    SendError,
 }
