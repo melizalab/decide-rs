@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use decide_protocol::{Component,
                       error::DecideError
 };
+use crate::tasklets::PlaybackError;
 
 mod tasklets;
 
@@ -81,12 +82,16 @@ impl Component for AlsaPlayback {
         let handle = thread::spawn(move || {
             tracing::info!("Sound-Alsa: Playback Thread created");
             let audio_dev = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    PlaybackError::HardwareSetupError {tag: "PCM initialization".to_string()}.into()
+                }).unwrap();
             tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
             tasklets::get_hw_config(&audio_dev, &config).unwrap();
 
             let mixer = alsa::mixer::Mixer::new(&config.card.clone(), false)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    PlaybackError::SoftwareSetupError {tag: "mixer initialization".to_string()}.into()
+                }).unwrap();
             let selem_id = alsa::mixer::SelemId::new("PCM", 0);
             let selem = mixer.find_selem(&selem_id).ok_or_else(|| {
                 format!(
@@ -95,21 +100,28 @@ impl Component for AlsaPlayback {
                 )
             }).unwrap();
             selem.set_playback_volume_range(0, 100)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    PlaybackError::SoftwareSetupError {tag: "volume range".to_string()}.into()
+                }).unwrap();
             selem.set_playback_volume_all(config.volume as i64)
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    PlaybackError::SoftwareSetupError {tag: "volume".to_string()}.into()
+                }).unwrap();
             drop(mixer);
             tracing::debug!("AlsaPlayback - volume set to {:?}", config.volume.clone());
 
             // let mut mmap = audio_dev.direct_mmap_playback::<i16>();
             let mut io = audio_dev.io_i16()
-                .map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                .map_err(|_e| DecideError::Component { source:
+                    PlaybackError::SoftwareSetupError {tag: "IO: 16bit".to_string()}.into()
+                }).unwrap();
             tracing::debug!("IO acquired");
 
             'stim: loop {
                 // Check shutdown
                 if sd_rx.try_recv().unwrap_err() == std_mpsc::TryRecvError::Disconnected {
-                    audio_dev.drop().map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+                    audio_dev.drain().expect("Draining PCM for shutdown.");
+                    audio_dev.drop().expect("Dropping PCM for shutdown");
                     break};
 
                 tracing::debug!("Sound_alsa - Awaiting import switch");
@@ -120,13 +132,19 @@ impl Component for AlsaPlayback {
                 // Block and await playback change to 1
                 wait(&playback, 0);
                 tracing::info!("Sound-Alsa: Playback Initiated!");
-                let stim = audio_id.lock().unwrap();
+                let stim = audio_id.lock()
+                    .map_err(|_e| DecideError::Component {source:
+                        PlaybackError::PlaybackMemoryError {tag: "stimulus id lock".to_string()}.into()
+                    }).unwrap();
                 let stim_name = OsString::from(stim.clone());
-                let stim_queue = queue.lock().unwrap();
+                let stim_queue = queue.lock()
+                    .map_err(|_e| DecideError::Component {source:
+                        PlaybackError::PlaybackMemoryError {tag: "playback queue lock".to_string()}.into()
+                    }).unwrap();
                 let data = stim_queue.get(&*stim_name)
-                    .ok_or("")
-                    .map_err(|_e| tracing::error!("Requested {:?} from Playlist: {:?}", stim_name, stim_queue.keys()))
-                    .unwrap();
+                    .ok_or( DecideError::Component { source:
+                        PlaybackError::StimulusMissing {name: stim.clone()}.into()
+                    }).unwrap();
 
                 let frame_count = data.1.clone();
                 frames.store(frame_count.clone(), Ordering::Release);
@@ -143,9 +161,11 @@ impl Component for AlsaPlayback {
                     Ok(n) => n,
                     Err(e) => {
                         tracing::warn!("Audio-playback failed to prepare for playback\
-                                        , recovering from {}", e);
+                                        , recovering from {:?}", e);
                         audio_dev.recover(e.errno() as std::os::raw::c_int, true)
-                            .unwrap();
+                            .map_err(|_e| DecideError::Component {source:
+                                PlaybackError::PlaybackError {tag: "recover".to_string()}.into()
+                            }).unwrap();
                     }
                 }
                 if !tasklets::playback_io(&audio_dev, &mut io, &data.0,
@@ -176,7 +196,10 @@ impl Component for AlsaPlayback {
                 match current_pb {
                     1 => {tracing::error!("Requested stim while already playing. Send next or stop first.")}
                     0 => {
-                        let mut audio_id = self.audio_id.lock().unwrap(); // this will block if playback is underway
+                        let mut audio_id = self.audio_id.lock()
+                            .map_err(|_e| DecideError::Component {source:
+                                PlaybackError::PlaybackMemoryError {tag: "stimulus id lock".to_string()}.into()
+                            })?; // this will block if playback is underway
                         *audio_id = state.audio_id;
                         self.playback.store(1, Ordering::Release);
                         let pb = self.playback.as_ref();
@@ -210,19 +233,28 @@ impl Component for AlsaPlayback {
         self.playback.store(0, Ordering::Release);
 
         //import
-        let current_conf: String = self.conf_path.lock().unwrap().drain(..).collect();
+        let current_conf: String = self.conf_path.lock()
+            .map_err(|_e| DecideError::Component {source:
+                PlaybackError::PlaybackMemoryError {tag: "config path lock".to_string()}.into()
+            })?.drain(..).collect();
 
         tracing::info!("Current Playback Directory :{:?}, Requested Directory {:?}",
             current_conf.clone(), params.conf_path);
 
         if params.conf_path != current_conf {
-            let mut stim_queue = self.playback_queue.lock().unwrap();
+            let mut stim_queue = self.playback_queue.lock()
+                .map_err(|_e| DecideError::Component {source:
+                    PlaybackError::PlaybackMemoryError {tag: "stimulus queue lock".to_string()}.into()
+                })?; // this will block if playback is underway
             stim_queue.clear();
             std::mem::drop(stim_queue);
             self.import_switch.store(1, Ordering::Release);
             let import_switch = self.import_switch.clone();
             let queue = self.playback_queue.clone();
-            let mut current_conf = self.conf_path.lock().unwrap();
+            let mut current_conf = self.conf_path.lock()
+                .map_err(|_e| DecideError::Component {source:
+                    PlaybackError::PlaybackMemoryError {tag: "config path lock".to_string()}.into()
+                })?; // this will block if playback is underway
             *current_conf = params.conf_path.clone();
             tracing::debug!("Calling Audio Import Function");
             tasklets::import_audio(import_switch, queue, self.channels.clone(),
@@ -234,7 +266,10 @@ impl Component for AlsaPlayback {
 
     fn get_state(&self) -> Self::State {
         Self::State {
-            audio_id: self.audio_id.lock().unwrap().clone(),
+            audio_id: self.audio_id.lock()
+                .map_err(|_e| DecideError::Component {source:
+                    PlaybackError::PlaybackMemoryError {tag: "stimulus id lock".to_string()}.into()
+                }).unwrap().clone(),
             playback: if self.playback.load(Ordering::Acquire)==1 {true} else {false},
             frame_count: self.frames.load(Ordering::Acquire),
         }
@@ -242,7 +277,10 @@ impl Component for AlsaPlayback {
 
     fn get_parameters(&self) -> Self::Params {
         Self::Params {
-            conf_path: self.conf_path.lock().unwrap().clone(),
+            conf_path: self.conf_path.lock()
+                .map_err(|_e| DecideError::Component {source:
+                    PlaybackError::PlaybackMemoryError {tag: "config path lock".to_string()}.into()
+                }).unwrap().clone(),
             audio_count: self.audio_count.load(Ordering::Relaxed),
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
         }
@@ -253,7 +291,9 @@ impl Component for AlsaPlayback {
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
-        }).await.map_err(|e| DecideError::Component { source: e.into() }).unwrap();
+        }).await.map_err(|_e| DecideError::Component { source:
+            PlaybackError::SendError.into()
+        }).unwrap();
     }
 
     async fn shutdown(&mut self) {

@@ -13,6 +13,7 @@ use serde::Deserialize;
 use sndfile::{ReadOptions, SndFileIO};
 use walkdir::WalkDir;
 use decide_protocol::error::DecideError;
+use thiserror::Error;
 
 pub fn import_audio(switch: Arc<AtomicU32>,
                 queue: Arc<Mutex<HashMap<OsString, (Vec<i16>,u32)>>>,
@@ -23,9 +24,13 @@ pub fn import_audio(switch: Arc<AtomicU32>,
         tracing::info!("Begin Importing Audio from {:?}", conf_path);
         let config_file_path = Path::new(&conf_path);
         let config_file = File::open(config_file_path)
-            .map_err(|e| panic!("Couldn't Open Config File Specified {:?}", e)).unwrap();
+            .map_err(|_e| DecideError::Component {source:
+                PlaybackError::FileAccessError {file: conf_path.clone()}.into()
+            }).unwrap();
         let exp_config: ConfFile = serde_json::from_reader(config_file)
-            .map_err(|e| DecideError::Component { source: e.into()}).unwrap();
+            .map_err(|e| DecideError::Component {source: e.into()}).unwrap();
+            // important to retain the error of parsing process
+
         tracing::info!("Stimulus Root Specified as {:?}", &exp_config.stimulus_root);
         let playlist = exp_config.get_names();
         for entry in WalkDir::new(exp_config.stimulus_root.clone())
@@ -41,14 +46,21 @@ pub fn import_audio(switch: Arc<AtomicU32>,
             if playlist.contains(&fname) {
                 let path = entry.path();
                 let mut stim_queue = queue.lock()
-                    .map_err(|_e| tracing::error!("Couldn't acquire lock on playlist"))
-                    .unwrap();
+                    .map_err(|_e| DecideError::Component {source:
+                        PlaybackError::PlaybackMemoryError {tag: "stimulus queue lock".to_string()}.into()
+                    }).unwrap(); // this will block if playback is underway
                 //avoid duplicates
                 if !stim_queue.contains_key(&fname) {
                     //make sure file is an audio file with "wav" extension
                     if path.extension().is_some_and(|ext| ext == "wav") {
-                        let mut audio_file = sndfile::OpenOptions::ReadOnly(ReadOptions::Auto).from_path(path).unwrap();
-                        let wav: Vec<i16> = audio_file.read_all_to_vec().unwrap();
+                        let mut audio_file = sndfile::OpenOptions::ReadOnly(ReadOptions::Auto).from_path(path)
+                            .map_err(|_e| DecideError::Component {source:
+                                PlaybackError::FileAccessError {file: String::from(path.to_str().unwrap())}.into()
+                            }).unwrap();
+                        let wav: Vec<i16> = audio_file.read_all_to_vec()
+                            .map_err(|_e| DecideError::Component {source:
+                                PlaybackError::StimParseError {file: fname.clone() }.into()
+                            }).unwrap();
                         let wav_channels = audio_file.get_channels();
                         let hw_channels = if channels { 2 } else { 1 };
                         tracing::info!("Importing file {:?}", fname);
@@ -63,8 +75,10 @@ pub fn import_audio(switch: Arc<AtomicU32>,
         }
         tracing::info!("Finished importing audio files");
         //add number of stims:
-        let length = queue.lock().unwrap()
-            .keys().len() as u32;
+        let length = queue.lock()
+            .map_err(|_e| DecideError::Component {source:
+                PlaybackError::PlaybackMemoryError {tag: "stimulus queue lock".to_string()}.into()
+            }).unwrap().keys().len() as u32;
         audio_count.store(length, Ordering::Relaxed);
         //ref line 117
         switch.store(0, Ordering::Release);
@@ -95,31 +109,58 @@ pub fn process_audio(wav: Vec<i16>, wav_channels: usize, hw_channels: u32) -> (V
         }
     };
     let length = result.len() as u32;
-    return (result, length);
+    (result, length)
 }
 
-pub fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> std::result::Result<bool, String>{
+pub fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> Result<bool, String>{
 
-    let hwp = HwParams::any(&pcm).unwrap();
-    hwp.set_channels(config.channels.clone()).unwrap();
-    hwp.set_rate(config.sample_rate, alsa::ValueOr::Nearest).unwrap();
-    hwp.set_access(Access::RWInterleaved).unwrap();
-    hwp.set_format(Format::s16()).unwrap();
-    hwp.set_buffer_size(1024).unwrap(); // A few ms latency by default
+    let hwp = HwParams::any(&pcm)
+        .map_err(|_e| DecideError::Component {source:
+            PlaybackError::HardwareSetupError {tag: "hardware params initialization".to_string()}.into()
+        }).unwrap();
+    hwp.set_channels(config.channels.clone())
+        .map_err(|_e| DecideError::Component {source:
+            PlaybackError::HardwareSetupError {tag: "playback channel count".to_string()}.into()
+        }).unwrap();
+    hwp.set_rate(config.sample_rate, alsa::ValueOr::Nearest)
+        .map_err(|_e| DecideError::Component {source:
+            PlaybackError::HardwareSetupError {tag: "sampling rate".to_string()}.into()
+        }).unwrap();
+    hwp.set_access(Access::RWInterleaved)
+        .map_err(|_e| DecideError::Component {source:
+            PlaybackError::HardwareSetupError {tag: "frame reading mode".to_string()}.into()
+        }).unwrap();
+    hwp.set_format(Format::s16())
+        .map_err(|_e| DecideError::Component {source:
+            PlaybackError::HardwareSetupError {tag: "playback bitrate".to_string()}.into()
+        }).unwrap();
+    hwp.set_buffer_size(1024)
+        .map_err(|_e| DecideError::Component {source:
+            PlaybackError::HardwareSetupError {tag: "buffer size".to_string()}.into()
+        }).unwrap();
     // hwp.set_period_size(512, alsa::ValueOr::Nearest).unwrap();
-    pcm.hw_params(&hwp).unwrap();
+    pcm.hw_params(&hwp)
+        .map_err(|_e| DecideError::Component {source:
+            PlaybackError::HardwareSetupError {tag: "setting hardware parameters".to_string()}.into()
+        }).unwrap();
     Ok(true)
 }
 
-pub fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, frames: u32, playback: &Arc<AtomicU32>)
-               -> std::result::Result<bool, String> {
+pub fn playback_io(pcm: &PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, frames: u32, playback: &Arc<AtomicU32>)
+               -> Result<bool, String> {
     let frames: usize = frames.try_into().unwrap();
     let avail = match pcm.avail_update() {
         Ok(n) => n,
         Err(e) => {
             tracing::warn!("Audio-playback failed to call available update, recovering from {}", e);
-            pcm.recover(e.errno() as std::os::raw::c_int, true).unwrap();
-            pcm.avail_update().unwrap()
+            pcm.recover(e.errno() as std::os::raw::c_int, true)
+                .map_err(|_e| DecideError::Component {source:
+                    PlaybackError::PlaybackError {tag: "recover".to_string()}.into()
+                }).unwrap();
+            pcm.avail_update()
+                .map_err(|_e| DecideError::Component {source:
+                    PlaybackError::PlaybackError {tag: "get available buffer".to_string()}.into()
+                }).unwrap()
         }
     } as usize;
     tracing::debug!("Available buffer for playback is {:?}", avail);
@@ -132,7 +173,10 @@ pub fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>
             Ok(n) => n,
             Err(e) => {
                 tracing::error!("Recovering from {}", e);
-                pcm.recover(e.errno() as std::os::raw::c_int, true).unwrap();
+                pcm.recover(e.errno() as std::os::raw::c_int, true)
+                    .map_err(|_e| DecideError::Component {source:
+                        PlaybackError::PlaybackError {tag: "recover".to_string()}.into()
+                    }).unwrap();
                 0
             }
         };
@@ -141,15 +185,25 @@ pub fn playback_io(pcm: &alsa::PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>
             State::Running => {
             }, // All fine
             State::Prepared => {
-                pcm.start().unwrap();
+                pcm.start()
+                    .map_err(|_e| DecideError::Component {source:
+                        PlaybackError::PlaybackError {tag: "start".to_string()}.into()
+                    }).unwrap();
+
             },
             State::XRun => {
                 tracing::warn!("Underrun in audio output stream!, will call prepare()");
-                pcm.prepare().unwrap();
+                pcm.prepare()
+                    .map_err(|_e| DecideError::Component {source:
+                        PlaybackError::PlaybackError {tag: "prepare".to_string()}.into()
+                    }).unwrap();
             },
             State::Suspended => {
                 tracing::error!("Suspended, will call prepare()");
-                pcm.prepare().unwrap();
+                pcm.prepare()
+                    .map_err(|_e| DecideError::Component {source:
+                        PlaybackError::PlaybackError {tag: "prepare".to_string()}.into()
+                    }).unwrap();
             },
             n @ _ => panic!("Unexpected pcm state {:?}", n),
         };
@@ -184,4 +238,24 @@ impl ConfFile {
             .map(|stim| OsString::from(&stim.name))
             .collect::<Vec<OsString>>()
     }
+}
+
+#[derive(Error, Debug)]
+pub enum PlaybackError {
+    #[error("could not send state update")]
+    SendError,
+    #[error("error trying to open file {file:?}")]
+    FileAccessError{file: String},
+    #[error("error trying to read wav file {file:?}")]
+    StimParseError{file: OsString},
+    #[error("error trying to set up {tag:?} for playback hardware. Check physical connections.")]
+    HardwareSetupError{tag: String},
+    #[error("error trying to set up {tag:?} for playback software. Try rebooting beaglebone.")]
+    SoftwareSetupError{tag: String},
+    #[error("stimulus id {name:?} does not exist in queue hashmap. Check stimulus directory.")]
+    StimulusMissing{name: String},
+    #[error("error trying to {tag:?} playback. Try restarting decide-core or rebooting.")]
+    PlaybackError{tag: String},
+    #[error("error accessing playback variable: {tag:?}. Please document and report conditions.")]
+    PlaybackMemoryError{tag: String},
 }
