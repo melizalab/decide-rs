@@ -1,10 +1,25 @@
 use anyhow::Context;
 use decide_core::{run, ComponentCollection};
 use tracing_subscriber::filter::EnvFilter;
+use clap::Parser;
 use time;
+
+#[derive(Debug, clap::Parser)]
+#[command(about, long_about=None)]
+struct Args {
+    #[arg(short, long)]
+    version: bool
+}
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> anyhow::Result<()> {
+
+    let args = Args::parse();
+    if args.version {
+        clap_vergen::print!((clap_vergen::Version{json: true}));
+        std::process::exit(0)
+    }
+
     let timer_fmt = time::format_description::parse(
         "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
     ).expect(" Setting Timer Format ");

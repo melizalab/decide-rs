@@ -1,9 +1,9 @@
 [package]
 name = "decide-core"
 version = "1.1.0"
-authors = ["Jonah Weissman <jonahrweissman@gmail.com>"]
+authors = ["Jonah Weissman <jonahrweissman@gmail.com>", "Bao Le <uac6qw@virginia.edu>"]
 edition = "2018"
-
+build = "build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -34,5 +34,11 @@ tracing = "0.1.29"
 tracing-subscriber = { version = "0.3.3", features = ['env-filter', 'time'] }
 async-trait = "0.1.51"
 time = { version = "0.3.20", features = ["local-offset"] }
+clap = { version = "4.5.23", features = ["derive"]}
+clap-vergen = "0.2.0"
+
+[build-dependencies]
+vergen = {version = "7.3.2", features = ["build", "cargo", "rustc"]}
+
 [features]
 dummy-mode = []
