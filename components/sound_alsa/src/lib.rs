@@ -73,19 +73,18 @@ impl Component for AlsaPlayback {
             1 => {false}
             2 => {true}
             _ => {
-                tracing::error!("Invalid number of audio channels specified in config");
+                tracing::error!("invalid number of audio channels specified in config {:?}", config.channels);
                 false
             }
         };
         self.sample_rate.store(config.sample_rate, Ordering::Release);
         //playback thread
         let handle = thread::spawn(move || {
-            tracing::info!("Sound-Alsa: Playback Thread created");
             let audio_dev = PCM::new(&config.audio_device.clone(), Direction::Playback, false)
                 .map_err(|_e| DecideError::Component { source:
                     PlaybackError::HardwareSetupError {tag: "PCM initialization".to_string()}.into()
                 }).unwrap();
-            tracing::debug!("AlsaPlayback - pcm device created on {:?}", config.audio_device.clone());
+            tracing::debug!("sound-alsa - pcm device created on {:?}", config.audio_device.clone());
             tasklets::get_hw_config(&audio_dev, &config).unwrap();
 
             let mixer = alsa::mixer::Mixer::new(&config.card.clone(), false)
@@ -108,14 +107,12 @@ impl Component for AlsaPlayback {
                     PlaybackError::SoftwareSetupError {tag: "volume".to_string()}.into()
                 }).unwrap();
             drop(mixer);
-            tracing::debug!("AlsaPlayback - volume set to {:?}", config.volume.clone());
 
             // let mut mmap = audio_dev.direct_mmap_playback::<i16>();
             let mut io = audio_dev.io_i16()
                 .map_err(|_e| DecideError::Component { source:
                     PlaybackError::SoftwareSetupError {tag: "IO: 16bit".to_string()}.into()
                 }).unwrap();
-            tracing::debug!("IO acquired");
 
             'stim: loop {
                 // Check shutdown
@@ -124,14 +121,12 @@ impl Component for AlsaPlayback {
                     audio_dev.drop().expect("Dropping PCM for shutdown");
                     break};
 
-                tracing::debug!("Sound_alsa - Awaiting import switch");
                 // block & await completion of import - change to 0
                 wait(&import_switch2, 1);
                 // playback loop
-                tracing::debug!("Sound_alsa - Awaiting playback request");
                 // Block and await playback change to 1
                 wait(&playback, 0);
-                tracing::info!("Sound-Alsa: Playback Initiated!");
+                tracing::info!("sound-alsa: starting playback!");
                 let stim = audio_id.lock()
                     .map_err(|_e| DecideError::Component {source:
                         PlaybackError::PlaybackMemoryError {tag: "stimulus id lock".to_string()}.into()
@@ -160,7 +155,7 @@ impl Component for AlsaPlayback {
                 match audio_dev.prepare() {
                     Ok(n) => n,
                     Err(e) => {
-                        tracing::warn!("Audio-playback failed to prepare for playback\
+                        tracing::warn!("sound-alsa failed to prepare for playback\
                                         , recovering from {:?}", e);
                         audio_dev.recover(e.errno() as std::os::raw::c_int, true)
                             .map_err(|_e| DecideError::Component {source:
@@ -172,7 +167,7 @@ impl Component for AlsaPlayback {
                                           frame_count, &playback).unwrap() {
                     continue 'stim
                 }
-                tracing::info!("Sound-Alsa: Playback Completed!");
+                tracing::info!("sound-alsa: playback complete!");
                 // playback finished without interruption. Send info about completed stim
                 block_on(
                     Self::send_state(&Self::State {
@@ -185,6 +180,7 @@ impl Component for AlsaPlayback {
                 //audio_dev.drop().unwrap();
             }
         });
+        tracing::info!("sound-alsa initiated.");
         self.shutdown = Some((handle, sd_tx));
     }
 
@@ -204,27 +200,25 @@ impl Component for AlsaPlayback {
                         self.playback.store(1, Ordering::Release);
                         let pb = self.playback.as_ref();
                         wake_all(pb);
-                        tracing::debug!("Notified playback thread of changing state to Playing");
                     }
                     _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
                 }
             }
             false => {
                 match current_pb {
-                    1 => {
+                    1 => { // playback requested interruption
                         self.playback.store(0, Ordering::Release);
-                        tracing::debug!("Playback requested interrupt.");
+                        tracing::debug!("sound-alsa requested interrupt.");
                     }
                     0 => {
-                        tracing::info!("Playback requested to stop while already stopped.");
+                        tracing::info!("sound-alsa requested to stop while already stopped.");
                     }
-                    _ => {tracing::error!("Invalid Playback value detected {:?}", current_pb)}
+                    _ => {tracing::error!("sound-alsa invalid playback value detected {:?}", current_pb)}
                 }
             }
         };
         //we do not send actual state change PUB messages in change_state(), since it's more important
         //that PUB msgs come from the playback thread
-        tracing::info!("Sound-Alsa: State Changed by Request");
         Ok(())
     }
 
@@ -238,7 +232,7 @@ impl Component for AlsaPlayback {
                 PlaybackError::PlaybackMemoryError {tag: "config path lock".to_string()}.into()
             })?.drain(..).collect();
 
-        tracing::info!("Current Playback Directory :{:?}, Requested Directory {:?}",
+        tracing::info!("sound-alsa current config file :{:?}, provided config file {:?}",
             current_conf.clone(), params.conf_path);
 
         if params.conf_path != current_conf {
@@ -256,11 +250,9 @@ impl Component for AlsaPlayback {
                     PlaybackError::PlaybackMemoryError {tag: "config path lock".to_string()}.into()
                 })?; // this will block if playback is underway
             *current_conf = params.conf_path.clone();
-            tracing::debug!("Calling Audio Import Function");
             tasklets::import_audio(import_switch, queue, self.channels.clone(),
                                    params.conf_path,self.audio_count.clone())
         };
-        tracing::info!("Sound-Alsa Parameters Changed");
         Ok(())
     }
 
@@ -287,7 +279,7 @@ impl Component for AlsaPlayback {
     }
 
     async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
-        tracing::debug!("Emiting state change");
+        tracing::debug!("emitting state change");
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
@@ -297,7 +289,6 @@ impl Component for AlsaPlayback {
     }
 
     async fn shutdown(&mut self) {
-        tracing::info!("Sound-Alsa: Shutdown Called");
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
             drop(handle);

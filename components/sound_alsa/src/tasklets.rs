@@ -21,7 +21,7 @@ pub fn import_audio(switch: Arc<AtomicU32>,
                 conf_path: String,
                 audio_count: Arc<AtomicU32>) {
     thread::spawn(move || {
-        tracing::info!("Begin Importing Audio from {:?}", conf_path);
+        tracing::info!("sound-alsa importing audio from config file {:?}", conf_path);
         let config_file_path = Path::new(&conf_path);
         let config_file = File::open(config_file_path)
             .map_err(|_e| DecideError::Component {source:
@@ -31,7 +31,7 @@ pub fn import_audio(switch: Arc<AtomicU32>,
             .map_err(|e| DecideError::Component {source: e.into()}).unwrap();
             // important to retain the error of parsing process
 
-        tracing::info!("Stimulus Root Specified as {:?}", &exp_config.stimulus_root);
+        tracing::info!("sound-alsa stimuli folder specified by config file: {:?}", &exp_config.stimulus_root);
         let playlist = exp_config.get_names();
         for entry in WalkDir::new(exp_config.stimulus_root.clone())
             .into_iter()
@@ -73,7 +73,7 @@ pub fn import_audio(switch: Arc<AtomicU32>,
             }
 
         }
-        tracing::info!("Finished importing audio files");
+        tracing::info!("sound-alsa import completed");
         //add number of stims:
         let length = queue.lock()
             .map_err(|_e| DecideError::Component {source:
@@ -149,10 +149,10 @@ pub fn get_hw_config<'a>(pcm: &'a PCM, config: &'a Config) -> Result<bool, Strin
 pub fn playback_io(pcm: &PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, frames: u32, playback: &Arc<AtomicU32>)
                -> Result<bool, String> {
     let frames: usize = frames.try_into().unwrap();
-    let avail = match pcm.avail_update() {
+    let _avail = match pcm.avail_update() {
         Ok(n) => n,
         Err(e) => {
-            tracing::warn!("Audio-playback failed to call available update, recovering from {}", e);
+            tracing::warn!("sound-alsa failed to call available update, recovering from {}", e);
             pcm.recover(e.errno() as std::os::raw::c_int, true)
                 .map_err(|_e| DecideError::Component {source:
                     PlaybackError::PlaybackError {tag: "recover".to_string()}.into()
@@ -163,7 +163,7 @@ pub fn playback_io(pcm: &PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, fram
                 }).unwrap()
         }
     } as usize;
-    tracing::debug!("Available buffer for playback is {:?}", avail);
+    // tracing::debug!("Available buffer for playback is {:?}", avail);
     let mut pointer = 0;
     let mut _written: usize = 0;
     //loop while playing
@@ -192,20 +192,20 @@ pub fn playback_io(pcm: &PCM, io: &mut alsa::pcm::IO<i16>, data: &Vec<i16>, fram
 
             },
             State::XRun => {
-                tracing::warn!("Underrun in audio output stream!, will call prepare()");
+                tracing::warn!("underrun in audio output stream!, will call prepare()");
                 pcm.prepare()
                     .map_err(|_e| DecideError::Component {source:
                         PlaybackError::PlaybackError {tag: "prepare".to_string()}.into()
                     }).unwrap();
             },
             State::Suspended => {
-                tracing::error!("Suspended, will call prepare()");
+                tracing::error!("sound-alsa suspended, will call prepare()");
                 pcm.prepare()
                     .map_err(|_e| DecideError::Component {source:
                         PlaybackError::PlaybackError {tag: "prepare".to_string()}.into()
                     }).unwrap();
             },
-            n @ _ => panic!("Unexpected pcm state {:?}", n),
+            n @ _ => panic!("sound-alsa unexpected pcm state {:?}", n),
         };
     };
     Ok(true)

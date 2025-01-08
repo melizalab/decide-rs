@@ -6,5 +6,5 @@ message SmState {
 }
 
 message SmParams {
-  uint64 timeout = 1;
+  uint64 timeout_ms = 1;
 }

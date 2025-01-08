@@ -64,7 +64,7 @@ impl Component for PeckLeds {
                     PeckBoardError::WriteError { path: sysfs_chip,
                                                  value: "pcf8575 0x20".to_string()}.into()})
                 .unwrap();
-            tracing::debug!("Peckboard Chip Initiated");
+            tracing::debug!("peckboard gpio chip initiated");
             assert!(Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists());
         }
         thread::sleep(Duration::from_secs(2));
@@ -88,7 +88,7 @@ impl Component for PeckLeds {
     }
 
     async fn init(&mut self, _config: Self::Config) {
-        tracing::info!("PeckLed Initiated")
+        tracing::info!("peck-led initiated")
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -98,7 +98,7 @@ impl Component for PeckLeds {
             "blue" => {self.led_state = LedColor::Blue}
             "green" => {self.led_state = LedColor::Green}
             "white" => {self.led_state = LedColor::White}
-            _ => {tracing::error!("PeckLed State received is invalid string {:?}", state.led_state.as_str());}
+            _ => {tracing::error!("peck-led state change contains invalid string {:?}", state.led_state.as_str());}
         }
         let lines_value = self.led_state.as_value();
         self.handles.set_values(&lines_value)
@@ -108,7 +108,6 @@ impl Component for PeckLeds {
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
             Self::send_state(&state, &sender).await;
-            tracing::info!("PeckLed State Changed by Request");
         });
         Ok(())
     }
@@ -134,12 +133,11 @@ impl Component for PeckLeds {
     }
 
     async fn send_state(state: &Self::State, sender: &Sender<Any>) {
-        tracing::debug!("Emiting state change");
+        tracing::debug!("emitting state change");
         Self::send_state(&state, &sender).await
     }
 
     async fn shutdown(&mut self) {
-        tracing::debug!("Shutdown called for PeckLed");
         self.handles.set_values(&LedColor::Off.as_value())
             .map_err(|_e| DecideError::Component { source:
                 GpioLineSetError {value: Vec::from(&LedColor::Off.as_value()) }.into() })
@@ -229,7 +227,7 @@ impl Component for PeckKeys {
                                 if values.iter().all(|&i| i == first) {
                                     continue
                                 } else {
-                                    tracing::info!("PeckKey Interrupted - Event {:?} Registered", values);
+                                    tracing::info!("peck-key interrupted - event {:?} registered", values);
                                     let state = Self::State {
                                         peck_left: values[2] != 0,
                                         peck_center: values[1] != 0,
@@ -241,11 +239,11 @@ impl Component for PeckKeys {
                             EventType::RisingEdge => { continue }
                         }
                     }
-                    None => {tracing::error!("PeckKey Interrupted - No Event Registered");continue},
+                    None => {tracing::error!("peck-key interrupted - no event?");continue},
                 }
             }
         }));
-        tracing::info!("PeckKeys Initiated");
+        tracing::info!("peck-key initiated");
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -256,7 +254,6 @@ impl Component for PeckKeys {
         let sender = self.state_sender.clone();
         tokio::spawn(async move {
             Self::send_state(&state, &sender).await;
-            tracing::info!("PeckKeys State Changed by Request");
         });
         Ok(())
     }
@@ -279,7 +276,7 @@ impl Component for PeckKeys {
     }
 
     async fn send_state(state: &Self::State, sender: &Sender<Any>) {
-        tracing::debug!("Emitting state change");
+        tracing::debug!("emitting state change");
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
@@ -289,7 +286,6 @@ impl Component for PeckKeys {
     }
 
     async fn shutdown(&mut self) {
-        tracing::debug!("Shutdown called for PeckKeys");
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
             assert!(task_handle.await.unwrap_err().is_cancelled());

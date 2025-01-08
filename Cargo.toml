@@ -7,6 +7,7 @@ members = [
     "components/lights",
     "components/house_light",
     "components/stepper_motor",
+    "components/mini_motor",
     "components/peckboard",
     "components/sound_alsa",
     "components/tripwire",

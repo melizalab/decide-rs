@@ -8,5 +8,5 @@ message HlState {
 }
 
 message HlParams {
-  int64 clock_interval = 1;
+  int64 clock_interval_sec = 1;
 }

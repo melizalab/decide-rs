@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use atomic_wait::wait;
+use atomic_wait::{wait, wake_one};
 use decide_protocol::{error::DecideError,
                       Component};
 use hal::{delay, i2c};
@@ -34,12 +34,12 @@ impl Component for TripWire {
     type State = proto::WireState;
     type Params = proto::WireParams;
     type Config = Config;
-    const STATE_TYPE_URL: &'static str = "type.googleapis.com/TripState";
-    const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/TripParams";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/WireState";
+    const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/WireParams";
 
     fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self{
         TripWire {
-            polling: Arc::new(AtomicU32::new(0)),
+            polling: Arc::new(AtomicU32::new(1)),
             blocking: Arc::new(AtomicBool::new(false)),
             timing: Arc::new([
                 AtomicU32::new(config.budget.clamp(10,200)),
@@ -95,31 +95,39 @@ impl Component for TripWire {
                     break
                 };
                 wait(&obj_polling, 0);
-                let measure = sensor.measure().await
-                    .map_err(|_e| DecideError::Component {source:
-                        TripWireError::I2CError {tag: "measure".to_string()}.into() })
-                    .unwrap();
-                if measure.is_valid() {
-                    if (measure.distance>range[0])&(measure.distance<range[1])&(!blocking) {
-                        Self::send_state(
-                            &Self::State{polling: true, blocking: true},
-                            &sender
-                        ).await;
-                        blocking=true
-                    } else if blocking&((measure.distance<range[0])|(measure.distance>range[1])) {
-                        Self::send_state(
-                            &Self::State{polling: true, blocking: false},
-                            &sender
-                        ).await;
-                        blocking=false
+                sensor.start_ranging().await.unwrap();
+                'measure: while obj_polling.load(Ordering::Acquire)==1 {
+                    match sensor.measure().await {
+                        Err(_e) => {
+                            tracing::warn!("measure invalid! {_e}");
+                            continue 'measure
+                        }
+                        Ok(measure) => {
+                            if measure.is_valid() {
+                                if (measure.distance > range[0]) & (measure.distance < range[1]) & (!blocking) {
+                                    tracing::info!("tripwire blocked!");
+                                    Self::send_state(
+                                        &Self::State { polling: true, blocking: true },
+                                        &sender
+                                    ).await;
+                                    blocking = true
+                                } else if blocking & ((measure.distance < range[0]) | (measure.distance > range[1])) {
+                                    tracing::info!("tripwire unblocked!");
+                                    Self::send_state(
+                                        &Self::State { polling: true, blocking: false },
+                                        &sender
+                                    ).await;
+                                    blocking = false
+                                }
+                            }
+                        }
                     }
-                } else {
-                    tracing::debug!("Invalid measurement.")
-                }
+                };
+                sensor.stop_ranging().await.unwrap();
             }
         });
         self.shutdown = Some((trip_handle, shutdown_tx));
-        tracing::info!("TripWire Initiation Complete.");
+        tracing::info!("tripwire initiated.");
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -127,12 +135,15 @@ impl Component for TripWire {
             true => { self.polling.store(1, Ordering::Release) }
             false => { self.polling.store(0, Ordering::Release) }
         };
-        tracing::info!("TripWire: State Changed by Request");
+        // block_on(
+        //     Self::send_state(&Self::State { polling: true, blocking: false }, &self.state_sender.clone())
+        // );
+        wake_one(self.polling.as_ref());
         Ok(())
     }
 
     fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
-        tracing::error!("TripWire params is empty. Make sure your script isn't using it without good reason");
+        tracing::error!("tripwire params is empty. Make sure your script isn't using it without good reason");
         Ok(())
     }
 
@@ -152,7 +163,6 @@ impl Component for TripWire {
     }
 
     async fn send_state(state: &Self::State, sender: &mpsc::Sender<Any>) {
-        tracing::debug!("Emitting state change");
         sender.send(Any {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
@@ -161,7 +171,6 @@ impl Component for TripWire {
     }
 
     async fn shutdown(&mut self) {
-        tracing::info!("TripWire: Shutdown Called");
         if let Some((handle, sender)) = self.shutdown.take() {
             drop(sender);
             handle.abort();
