@@ -148,7 +148,7 @@ impl ComponentCollection {
 
     async fn handle_request(&mut self, request: Multipart) -> Result<proto::Reply> {
         let request = Request::try_from(request)?;
-        info!("Received Request {:?} for {:?}", request.request_type, request.component);
+        info!("received request {:?} for {:?}", request.request_type, request.component);
         match request.request_type {
             RequestType::General(req) => self.handle_general(req, request.body).await,
             RequestType::Component(req) => self.handle_component(req, request).await,

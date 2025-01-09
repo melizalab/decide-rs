@@ -106,9 +106,7 @@ impl Component for PeckLeds {
                 PeckBoardError::GpioLineSetError {value: Vec::from(lines_value) }.into()
             })?;
         let sender = self.state_sender.clone();
-        tokio::spawn(async move {
-            Self::send_state(&state, &sender).await;
-        });
+        futures::executor::block_on(Self::send_state(&state, &sender));
         Ok(())
     }
 
@@ -133,8 +131,12 @@ impl Component for PeckLeds {
     }
 
     async fn send_state(state: &Self::State, sender: &Sender<Any>) {
-        tracing::debug!("emitting state change");
-        Self::send_state(&state, &sender).await
+        tracing::debug!("Emiting state change");
+        sender.send(Any {
+            type_url: String::from(Self::STATE_TYPE_URL),
+            value: state.encode_to_vec(),
+        }).await.map_err(|_e| DecideError::Component { source:
+        PeckBoardError::SendError.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {
