@@ -2,7 +2,6 @@ use lights::Lights;
 use house_light::HouseLight;
 use peckboard::{PeckKeys, PeckLeds};
 use stepper_motor::StepperMotor;
-use mini_motor::CapelessMotor;
 use tripwire::TripWire;
 use sound_alsa::AlsaPlayback;
 
@@ -179,4 +178,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,CapelessMotor,PeckLeds,PeckKeys,AlsaPlayback,TripWire);
+impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,TripWire);

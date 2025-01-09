@@ -19,8 +19,15 @@ docker build -t decide-rs/image:tag ./
 cross build --target armv7-unknown-linux-gnueabihf --release
 ```
 
-## Logging
+## logging
 Logging level defaults to INFO, but can be overwritten with `export DECIDE_LOG="value"`
+
+## adding components
+
+1. Design component as a separate crate ("package") under `./components/` according to the [protocol](PROTOCOL.md). Follow `./components/lights` as an example.
+2. Include component crate in `decide-core` dependencies (`./decide-core/Cargo.toml`).
+3. Import `Component`-implemented struct and add to list of components in `impl_components!` macro in `./decide-core/src/components.rs`
+4. Include component crate in the main cargo manifest  (`./Cargo.toml`)
 
 ## running tests
 

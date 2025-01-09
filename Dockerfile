@@ -7,4 +7,4 @@ RUN dpkg --add-architecture armhf && \
     libzmq3-dev:armhf \
     libsndfile-dev:armhf \
     pkg-config
-ENV PKG_CONFIG_PATH=$SYSROOT/usr/lib/arm-linux-gnueabihf/pkgconfig
+ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
