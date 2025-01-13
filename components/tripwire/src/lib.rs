@@ -17,6 +17,7 @@ use thiserror::Error;
 use tokio::{
     self, sync::mpsc, task::JoinHandle
 };
+use simple_moving_average::{SMA, NoSumSMA};
 use vl53l4cd::Vl53l4cd;
 
 pub struct TripWire {
@@ -89,6 +90,8 @@ impl Component for TripWire {
                 .map_err(|_e| DecideError::Component {source:
                     TripWireError::I2CError {tag:"set_range_timing".to_string()}.into() })
                 .unwrap();
+            let mut rolling_range = NoSumSMA::<_, u16, 5>::new();
+            let mut mean_range: u16;
 
             loop {
                 if shutdown_rx.try_recv().unwrap_err() == mpsc::error::TryRecvError::Disconnected {
@@ -104,14 +107,16 @@ impl Component for TripWire {
                         }
                         Ok(measure) => {
                             if measure.is_valid() {
-                                if (measure.distance > range[0]) & (measure.distance < range[1]) & (!blocking) {
+                                rolling_range.add_sample(measure.distance);
+                                mean_range = rolling_range.get_average();
+                                if (mean_range > range[0]) & (mean_range < range[1]) & (!blocking) {
                                     tracing::info!("tripwire blocked!");
                                     Self::send_state(
                                         &Self::State { polling: true, blocking: true },
                                         &sender
                                     ).await;
                                     blocking = true
-                                } else if blocking & ((measure.distance < range[0]) | (measure.distance > range[1])) {
+                                } else if blocking & ((mean_range < range[0]) | (mean_range > range[1])) {
                                     tracing::info!("tripwire unblocked!");
                                     Self::send_state(
                                         &Self::State { polling: true, blocking: false },

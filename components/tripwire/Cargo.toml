@@ -20,6 +20,7 @@ futures = "0.3.17"
 vl53l4cd = "0.4.0"
 linux-embedded-hal-async = {path = './linux-embedded-hal-async'}
 i2cdev = "0.6.1"
+simple_moving_average = "1.0.2"
 
 [build-dependencies]
 prost-build = "0.11.1"
