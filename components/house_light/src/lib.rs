@@ -48,9 +48,9 @@ impl Component for HouseLight {
                 HouseLightError::WriteError { path: export_loc.clone(), value: "1".to_string() }.into()
             }).unwrap()
         }
-        let configs = vec!["period", "500000", "polarity", "inverted", "enable", "1"];
+        let configs = vec!["period", "500000", "polarity", "inversed", "enable", "1"];
         for pair in configs.chunks(2) {
-            let write_loc = format!(pwm_address, pair[0]);
+            let write_loc = format!("{}{}", pwm_address, pair[0]);
             fs::write(write_loc.clone(), pair[1])
                 .map_err(|_e| DecideError::Component { source:
                 HouseLightError::WriteError { path: write_loc, value: pair[1].to_string() }.into()
@@ -80,7 +80,6 @@ impl Component for HouseLight {
         //let period = config.period;
 
         self.task_handle = Some(tokio::spawn(async move {
-            let dev_path = config.device_path.clone();
             loop {
                 if manual.load(Ordering::Acquire) { // manual brightness setting
                     let bt = brightness.load(Ordering::Acquire);
@@ -99,22 +98,9 @@ impl Component for HouseLight {
                                                              config.lat,
                                                              config.lon);
                     let new_brightness = HouseLight::calc_brightness(altitude, config.max_brightness);
-                    let duty_cycle = 500000 * (1 - new_brightness as u16 / 255);
                     let dt = new_brightness > 0;
                     daytime.store(dt, Ordering::Release);
-
-                    //let duty = HouseLight::get_duty(period, new_brightness);
-                    let path = fs::canonicalize(PathBuf::from(dev_path.clone()))
-                        .map_err(|_e| DecideError::Component {
-                            source: HouseLightError::InvalidFs {
-                                requested: dev_path.clone()}.into()
-                        }).unwrap();
-                    fs::write(path.clone(), duty_cycle.to_string())
-                        .map_err(|_e| DecideError::Component {
-                            source: HouseLightError::WriteError {
-                                path: dev_path.clone(), value: duty_cycle.to_string() }.into()
-                        }).unwrap();
-                    tracing::info!("house light brightness set to {:?} ", new_brightness);
+                    Self::write_brightness(new_brightness, config.device_path.clone());
                     brightness.store(new_brightness, Ordering::Relaxed);
                     Self::send_state(
                         &Self::State{ manual: false, dyson,
@@ -130,25 +116,13 @@ impl Component for HouseLight {
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
         let sender = self.state_sender.clone();
-        let dev_path = self.config.device_path.clone();
         self.manual.store(state.manual, Ordering::Relaxed);
         self.dyson.store(state.dyson, Ordering::Relaxed);
 
         // Change brightness immediately
         let new_brightness = if state.manual {
             let new_brightness = state.brightness as u8;
-            let duty_cycle = 500000 * (1 - new_brightness as u16 / 255);
-            let path = fs::canonicalize(PathBuf::from(dev_path.clone()))
-                .map_err(|_e| DecideError::Component {
-                    source: HouseLightError::InvalidFs {
-                        requested: dev_path.clone()}.into()
-                })?;
-            fs::write(path.clone(), duty_cycle.to_string())
-                .map_err(|_e| DecideError::Component {
-                    source: HouseLightError::WriteError {
-                        path: dev_path.clone(), value: duty_cycle.to_string() }.into()
-                })?;
-            tracing::info!("house light brightness set to {:?} manually", new_brightness);
+            Self::write_brightness(new_brightness, self.config.device_path.clone());
             self.brightness.store(new_brightness, Ordering::Relaxed);
 	    new_brightness
 
@@ -160,20 +134,9 @@ impl Component for HouseLight {
                                                      self.config.lat,
                                                      self.config.lon);
             let new_brightness = HouseLight::calc_brightness(altitude, self.config.max_brightness);
-            let duty_cycle = 500000 * (1 - new_brightness as u16 / 255);
             let dt = new_brightness > 0;
             self.daytime.store(dt, Ordering::Release);
-
-            let path = fs::canonicalize(PathBuf::from(dev_path.clone()))
-                .map_err(|_e| DecideError::Component {
-                    source: HouseLightError::InvalidFs {
-                        requested: dev_path.clone()}.into()
-                })?;
-            fs::write(path.clone(), duty_cycle.to_string())
-                .map_err(|_e| DecideError::Component {
-                    source: HouseLightError::WriteError {
-                        path: dev_path.clone(), value: duty_cycle.to_string() }.into()
-                })?;
+            Self::write_brightness(new_brightness, self.config.device_path.clone());
             self.brightness.store(new_brightness, Ordering::Relaxed);
 	    new_brightness
         };
@@ -251,6 +214,20 @@ impl HouseLight {
             tracing::debug!("fake clock not specified, time is {:?}", now);
             sun::pos(now.as_millis() as i64, lat, lon).altitude
         }
+    }
+    fn write_brightness(new_brightness: u8, pwm_path: String) {
+        let duty_cycle = 500000 * (1 - new_brightness as u32 / 255);
+        let path = fs::canonicalize(PathBuf::from(pwm_path.clone()))
+            .map_err(|_e| DecideError::Component {
+                source: HouseLightError::InvalidFs {
+                    requested: pwm_path.clone()}.into()
+            }).unwrap();
+        fs::write(path.clone(), duty_cycle.to_string())
+            .map_err(|_e| DecideError::Component {
+                source: HouseLightError::WriteError {
+                    path: pwm_path.clone(), value: duty_cycle.to_string() }.into()
+            }).unwrap();
+        tracing::info!("house light brightness set to {:?} ", new_brightness);
     }
 }
 
