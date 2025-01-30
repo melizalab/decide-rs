@@ -216,7 +216,7 @@ impl HouseLight {
         }
     }
     fn write_brightness(new_brightness: u8, pwm_path: String) {
-        let duty_cycle = 500000 * (1 - new_brightness as u32 / 255);
+        let duty_cycle: u32 = (500000.0 * (1.0 - (new_brightness as f64 / 255.0))) as u32;
         let path = fs::canonicalize(PathBuf::from(pwm_path.clone()))
             .map_err(|_e| DecideError::Component {
                 source: HouseLightError::InvalidFs {
