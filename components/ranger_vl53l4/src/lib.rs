@@ -20,7 +20,7 @@ use tokio::{
 use simple_moving_average::{SMA, NoSumSMA};
 use vl53l4cd::Vl53l4cd;
 
-pub struct TripWire {
+pub struct RangerVl53l4 {
     polling: Arc<AtomicU32>,
     blocking: Arc<AtomicBool>,
     timing: Arc<[AtomicU32; 2]>,
@@ -31,7 +31,7 @@ pub struct TripWire {
 }
 
 #[async_trait]
-impl Component for TripWire {
+impl Component for RangerVl53l4 {
     type State = proto::WireState;
     type Params = proto::WireParams;
     type Config = Config;
@@ -39,7 +39,7 @@ impl Component for TripWire {
     const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/WireParams";
 
     fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self{
-        TripWire {
+        RangerVl53l4 {
             polling: Arc::new(AtomicU32::new(1)),
             blocking: Arc::new(AtomicBool::new(false)),
             timing: Arc::new([
@@ -110,14 +110,14 @@ impl Component for TripWire {
                                 rolling_range.add_sample(measure.distance);
                                 mean_range = rolling_range.get_average();
                                 if (mean_range > range[0]) & (mean_range < range[1]) & (!blocking) {
-                                    tracing::info!("tripwire blocked!");
+                                    tracing::info!("rangefinder blocked!");
                                     Self::send_state(
                                         &Self::State { polling: true, blocking: true },
                                         &sender
                                     ).await;
                                     blocking = true
                                 } else if blocking & ((mean_range < range[0]) | (mean_range > range[1])) {
-                                    tracing::info!("tripwire unblocked!");
+                                    tracing::info!("rangefinder unblocked!");
                                     Self::send_state(
                                         &Self::State { polling: true, blocking: false },
                                         &sender
@@ -132,7 +132,7 @@ impl Component for TripWire {
             }
         });
         self.shutdown = Some((trip_handle, shutdown_tx));
-        tracing::info!("tripwire initiated.");
+        tracing::info!("rangefinder vl53l4cd initiated.");
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
@@ -148,7 +148,7 @@ impl Component for TripWire {
     }
 
     fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
-        tracing::error!("tripwire params is empty. Make sure your script isn't using it without good reason");
+        tracing::error!("rangefinder vl53l4cd params is empty. Make sure your script isn't using it without good reason");
         Ok(())
     }
 

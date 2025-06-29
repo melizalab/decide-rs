@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+message WireState {
+  bool polling = 1;
+  bool blocking = 2;
+}
+
+message WireParams {
+}
