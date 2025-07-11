@@ -19,7 +19,7 @@ use vcnl4040::{LedCurrent, LedDutyCycle, ProximityIntegrationTime, Vcnl4040};
 use i2cdev::linux::LinuxI2CBus;
 use linux_embedded_hal_async::i2c;
 
-pub struct RangerVcnl4040 {
+pub struct ProxSensor {
     polling: Arc<AtomicU32>,
     blocking: Arc<AtomicBool>,
     range: Arc<[AtomicU16; 2]>,
@@ -29,7 +29,7 @@ pub struct RangerVcnl4040 {
 }
 
 #[async_trait]
-impl Component for RangerVcnl4040 {
+impl Component for ProxSensor {
     type State = proto::WireState;
     type Params = proto::WireParams;
     type Config = Config;
@@ -37,7 +37,7 @@ impl Component for RangerVcnl4040 {
     const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/WireParams";
 
     fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self{
-        RangerVcnl4040 {
+        ProxSensor {
             polling: Arc::new(AtomicU32::new(1)),
             blocking: Arc::new(AtomicBool::new(false)),
             range: Arc::new([

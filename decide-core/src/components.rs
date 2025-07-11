@@ -2,8 +2,8 @@ use lights::Lights;
 use house_light::HouseLight;
 use peckboard::{PeckKeys, PeckLeds};
 use stepper_motor::StepperMotor;
-use ranger_vl53l4::RangerVl53l4;
-use ranger_vcnl4040::RangerVcnl4040;
+use ranger_vl53l4::TofSensor;
+use ranger_vcnl4040::ProxSensor;
 use sound_alsa::AlsaPlayback;
 
 macro_rules! impl_components {
@@ -179,4 +179,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,RangerVl53l4,RangerVcnl4040);
+impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,TofSensor,ProxSensor);

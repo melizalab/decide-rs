@@ -20,7 +20,7 @@ use tokio::{
 use simple_moving_average::{SMA, NoSumSMA};
 use vl53l4cd::Vl53l4cd;
 
-pub struct RangerVl53l4 {
+pub struct TofSensor {
     polling: Arc<AtomicU32>,
     blocking: Arc<AtomicBool>,
     timing: Arc<[AtomicU32; 2]>,
@@ -31,7 +31,7 @@ pub struct RangerVl53l4 {
 }
 
 #[async_trait]
-impl Component for RangerVl53l4 {
+impl Component for TofSensor {
     type State = proto::WireState;
     type Params = proto::WireParams;
     type Config = Config;
@@ -39,7 +39,7 @@ impl Component for RangerVl53l4 {
     const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/WireParams";
 
     fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self{
-        RangerVl53l4 {
+        TofSensor {
             polling: Arc::new(AtomicU32::new(1)),
             blocking: Arc::new(AtomicBool::new(false)),
             timing: Arc::new([
