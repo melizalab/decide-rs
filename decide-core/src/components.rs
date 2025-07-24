@@ -5,6 +5,7 @@ use stepper_motor::StepperMotor;
 use ranger_vl53l4::TofSensor;
 use ranger_vcnl4040::ProxSensor;
 use sound_alsa::AlsaPlayback;
+use gpio_led::GpioLed;
 
 macro_rules! impl_components {
     ($($component:ident),*) => {
@@ -179,4 +180,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,TofSensor,ProxSensor);
+impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,TofSensor,ProxSensor,GpioLed);

@@ -15,6 +15,7 @@ sound_alsa = { path = "../components/sound_alsa" }
 stepper_motor = { path = "../components/stepper_motor" }
 ranger_vcnl4040 = { path = "../components/ranger_vcnl4040" }
 ranger_vl53l4 = { path = "../components/ranger_vl53l4" }
+gpio_led = { path = "../components/gpio_led" }
 tmq = { version = "0.3", features = ["zmq-vendored"] }
 zmq = "0.9.2"
 log = "0.4.16"

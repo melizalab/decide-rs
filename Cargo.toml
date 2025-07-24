@@ -10,5 +10,6 @@ members = [
     "components/peckboard",
     "components/sound_alsa",
     "components/ranger_vl53l4",
-    "components/ranger_vcnl4040"
+    "components/ranger_vcnl4040",
+    "components/gpio_led"
 ]
