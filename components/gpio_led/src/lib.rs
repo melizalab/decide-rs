@@ -30,8 +30,8 @@ pub mod proto {
 
 #[async_trait]
 impl Component for GpioLed {
-    type State = proto::LedState;
-    type Params = proto::LedParams;
+    type State = proto::GledState;
+    type Params = proto::GledParams;
     type Config = LedConfig;
     const STATE_TYPE_URL: &'static str = "type.googleapis.com/LedState";
     const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
