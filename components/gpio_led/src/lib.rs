@@ -33,8 +33,8 @@ impl Component for GpioLed {
     type State = proto::GledState;
     type Params = proto::GledParams;
     type Config = LedConfig;
-    const STATE_TYPE_URL: &'static str = "type.googleapis.com/LedState";
-    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/GledState";
+    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/GledParams";
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
 
@@ -47,7 +47,7 @@ impl Component for GpioLed {
             .map_err(|_e| DecideError::Component { source:
                 LedError::GpioLineReqError {line: lineval}.into()
             }).unwrap()
-            .request(LineRequestFlags::OUTPUT, 0, "PeckLeds")
+            .request(LineRequestFlags::OUTPUT, 0, "GpioLed")
             .map_err(|_e| DecideError::Component { source:
                 LedError::GpioFlagReqError {line: lineval, flag:"OUT".to_string()}.into()
             }).unwrap();
