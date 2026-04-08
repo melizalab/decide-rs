@@ -1,5 +1,4 @@
 use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}};
-use std::time::Instant;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use gpio_cdev::{AsyncLineEventHandle, Chip,
@@ -11,7 +10,7 @@ use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::{self, time::Duration, sync::mpsc};
+use tokio::{self, time::{Duration, Instant}, sync::mpsc};
 use decide_protocol::{Component, error::DecideError};
 
 
@@ -60,7 +59,7 @@ impl Component for StepperMotor {
         StepperMotor {
             running: Arc::new(AtomicBool::new(false)),
             direction: Arc::new(AtomicBool::new(true)),
-            timeout_ms: Arc::new(AtomicU64::new(500)),
+            timeout_ms: Arc::new(AtomicU64::new(4000)),
             state_sender,
             req_sender: None,
             shutdown: None,
@@ -99,8 +98,8 @@ impl Component for StepperMotor {
 
                 // One of three things can trigger motor running: either the 2 switches, or client signal
                 let mut state = StepperMotor::poll_change(&mut switch_14,
-                                                      &mut switch_15,
-                                                      &mut req_rcv).await;
+                                                          &mut switch_15,
+                                                          &mut req_rcv).await;
 
                 if state.running {
                     tracing::debug!("stepper motor running!");
@@ -108,14 +107,26 @@ impl Component for StepperMotor {
                     direction.store(state.direction, Ordering::Release);
                     Self::send_state(&state, &state_sender).await;
                     let timer = Instant::now();
+
                     while Instant::now().duration_since(timer) <
                         Duration::from_millis(timeout_ms.load(Ordering::Acquire)) {
-                        step = StepperMotor::run_motor(step, &motor_1_handle,
-                                                       &motor_3_handle, state.direction);
-                        tokio::time::sleep(Duration::from_micros(dt)).await;
+                        step = StepperMotor::run_motor(
+                            step, &motor_1_handle,
+                            &motor_3_handle, state.direction).await;
+                        tokio::time::sleep(Duration::from_micros(dt)).await
                     }
                     StepperMotor::pause_motor(&motor_1_handle, &motor_3_handle);
                     tracing::debug!("stepper motor stopped!");
+                    
+                    let mut switches = false;
+                    while !switches {
+                        tokio::select!{
+                            _ = switch_14.next() => {}
+                            _ = switch_15.next() => {}
+                            _ = tokio::time::sleep(Duration::from_micros(dt)) => {switches=true}
+                        }}                                                       
+                    tracing::debug!("emptied motor switch buffers.");
+
                     state.running = false;
                     running.store(state.running, Ordering::Release);
                     direction.store(state.direction, Ordering::Release);
@@ -240,35 +251,19 @@ impl StepperMotor {
             Some(event) = sw14.next() => {
                 let evt_type = event.map_err(|_e| DecideError::Component { source:
                     StepperMotorError::GpioAsyncEventError.into() }).unwrap().event_type();
-                match evt_type {
-                    EventType::RisingEdge => {
-                        tracing::info!("stepper motor switch 14 pressed");
-                        //state.running = false;
-                        //state.direction = false;
-                    }
-                    EventType::FallingEdge => {
-                        tracing::debug!("stepper motor switch 14 depressed");
-                        state.running = true;
-                        //state.direction = false;
-
-                    }
+                if (evt_type==EventType::RisingEdge)|(evt_type==EventType::FallingEdge) {
+                    tracing::info!("stepper motor switch 14 pressed");
+                    state.direction = false;
+                    state.running = true;
                 }
             }
             Some(event) = sw15.next() => {
                 let evt_type = event.map_err(|_e| DecideError::Component { source:
                     StepperMotorError::GpioAsyncEventError.into() }).unwrap().event_type();
-                match evt_type {
-                    EventType::RisingEdge => {
-                        tracing::info!("stepper motor switch 15 pressed");
-                        //state.running = false;
-                        state.direction = true;
-                    }
-                    EventType::FallingEdge => {
-                        tracing::debug!("stepper motor switch 15 depressed");
-                        state.running = true;
-                        state.direction = true;
-
-                    }
+                if (evt_type==EventType::RisingEdge)|(evt_type==EventType::FallingEdge) {
+                    tracing::info!("stepper motor switch 15 pressed");
+                    state.direction = true;
+                    state.running = true;
                 }
             }
             Some(event) = state_rx.recv() => {
@@ -283,7 +278,7 @@ impl StepperMotor {
         state
     }
 
-    fn run_motor(mut step: usize, handle1: &MultiLineHandle, handle3: &MultiLineHandle, direction: bool) -> usize{
+    async fn run_motor(mut step: usize, handle1: &MultiLineHandle, handle3: &MultiLineHandle, direction: bool) -> usize{
         if direction {
             step = (step + 1) % Self::NUM_HALF_STEPS;
             let step_1_values = &Self::HALF_STEPS[step].0;

@@ -18,12 +18,9 @@ use std::sync::{
     atomic::AtomicBool,
     Arc,
 };
-use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
-use tokio::{
-    self, task::JoinHandle
-};
+use tokio::{self, task::JoinHandle, time::{Duration, Instant}};
 
 pub struct PeckLeds {
     handles: MultiLineHandle,
@@ -216,33 +213,36 @@ impl Component for PeckKeys {
                                       flag: "INPUT".to_string()}.into() })
                 .unwrap();
 
-            loop {
+            'poll: loop {
                 match interrupt.next().await {
                     Some(event) => {
-                        match event.unwrap().event_type() {
-                            EventType::FallingEdge => {
-                                let values = key_handles.get_values()
-                                    .map_err(|_e| DecideError::Component { source:
-                                        GpioLineGetError.into() })
-                                    .unwrap();
-                                let first = values[0];
-                                if values.iter().all(|&i| i == first) {
-                                    continue
-                                } else {
-                                    tracing::info!("peck-key interrupted - event {:?} registered", values);
-                                    let state = Self::State {
-                                        peck_left: values[2] != 0,
-                                        peck_center: values[1] != 0,
-                                        peck_right: values[0] != 0,
-                                    };
-                                    Self::send_state(&state, &sender).await;
-                                }
+                        let evt = event.unwrap().event_type();
+                        if (evt==EventType::FallingEdge)|(evt==EventType::RisingEdge) {
+                            let values = key_handles.get_values()
+                                .map_err(|_e| DecideError::Component { source:
+                                    GpioLineGetError.into() })
+                                .unwrap();
+                            if values.iter().all(|&i| i == 0) {
+                                continue 'poll
+                            } else {
+                                tracing::info!("peck-key interrupted - event {:?} registered", values);
+                                let state = Self::State {
+                                    peck_left: values[2] != 0,
+                                    peck_center: values[1] != 0,
+                                    peck_right: values[0] != 0,
+                                };
+                                Self::send_state(&state, &sender).await;
                             }
-                            EventType::RisingEdge => { continue }
                         }
                     }
-                    None => {tracing::error!("peck-key interrupted - no event?");continue},
-                }
+                    None => {tracing::error!("peck-key interrupted - no event?"); continue 'poll},
+                };
+                let mut debounce = false;
+                while !debounce {
+                    tokio::select! {
+                        _ = interrupt.next() => {}
+                        _ = tokio::time::sleep(Duration::from_micros(20)) => {debounce=true}
+                    }}
             }
         }));
         tracing::info!("peck-key initiated");

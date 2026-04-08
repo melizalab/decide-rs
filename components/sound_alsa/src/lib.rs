@@ -212,6 +212,11 @@ impl Component for AlsaPlayback {
                     }
                     0 => {
                         tracing::info!("sound-alsa requested to stop while already stopped.");
+                        // Self::send_state(&Self::State {
+                        //     audio_id: stim_name.clone().into_string().unwrap(),
+                        //     playback: false,
+                        //     frame_count: frame_count.clone()
+                        // }, &sender);
                     }
                     _ => {tracing::error!("sound-alsa invalid playback value detected {:?}", current_pb)}
                 }
