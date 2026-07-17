@@ -17,6 +17,7 @@ ranger_vcnl4040 = { path = "../components/ranger_vcnl4040" }
 ranger_vl53l4 = { path = "../components/ranger_vl53l4" }
 gpio_led = { path = "../components/gpio_led" }
 gpio_lev = { path = "../components/gpio_lever" }
+finchboard = { path = "../components/finchboard" }
 tmq = { version = "0.3", features = ["zmq-vendored"] }
 zmq = "0.9.2"
 log = "0.4.16"

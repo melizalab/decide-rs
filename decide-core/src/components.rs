@@ -7,6 +7,7 @@ use ranger_vcnl4040::ProxSensor;
 use sound_alsa::AlsaPlayback;
 use gpio_led::GpioLed;
 use gpio_lev::GpioLever;
+use finchboard::{FbKey, FbLed};
 
 macro_rules! impl_components {
     ($($component:ident),*) => {
@@ -181,4 +182,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,TofSensor,ProxSensor,GpioLed,GpioLever);
+impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,TofSensor,ProxSensor,GpioLed,GpioLever,FbKey,FbLed);

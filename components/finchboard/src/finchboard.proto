@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+message FbLedState {
+    string led_state = 1;
+}
+
+message FbLedParams {}
+
+message FbKeyState {
+    bool pecked = 1;
+}
+
+message FbKeyParams {}
