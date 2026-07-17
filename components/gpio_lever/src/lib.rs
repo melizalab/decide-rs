@@ -9,7 +9,7 @@ use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::{self, time::{Instant, Duration}, sync::mpsc::Sender, task::JoinHandle};
+use tokio::{self, time::{Duration}, sync::mpsc::Sender, task::JoinHandle};
 
 pub struct GpioLever {
     state_sender: Sender<Any>,

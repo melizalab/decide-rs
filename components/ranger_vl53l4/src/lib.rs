@@ -92,10 +92,10 @@ impl Component for TofSensor {
                 .unwrap();
             let mut rolling_range = NoSumSMA::<_, u16, 5>::new();
             let mut mean_range: u16;
-
-            loop {
+            let mut error_count: u8 = 0;
+            'engine: loop {
                 if shutdown_rx.try_recv().unwrap_err() == mpsc::error::TryRecvError::Disconnected {
-                    break
+                    break 'engine
                 };
                 wait(&obj_polling, 0);
                 sensor.start_ranging().await.unwrap();
@@ -103,25 +103,27 @@ impl Component for TofSensor {
                     match sensor.measure().await {
                         Err(_e) => {
                             tracing::warn!("measure invalid! {_e}");
-                            continue 'measure
+                            if error_count+1 > 20 {
+                                panic!("{}", &TripWireError::MeasureError);
+                            } else {
+                                error_count +=1;
+                                continue 'measure
+                            }
                         }
                         Ok(measure) => {
                             if measure.is_valid() {
+                                error_count = 0;
                                 rolling_range.add_sample(measure.distance);
                                 mean_range = rolling_range.get_average();
                                 if (mean_range > range[0]) & (mean_range < range[1]) & (!blocking) {
                                     tracing::info!("rangefinder blocked!");
                                     Self::send_state(
-                                        &Self::State { polling: true, blocking: true },
-                                        &sender
-                                    ).await;
+                                        &Self::State { polling: true, blocking: true }, &sender).await;
                                     blocking = true
                                 } else if blocking & ((mean_range < range[0]) | (mean_range > range[1])) {
                                     tracing::info!("rangefinder unblocked!");
                                     Self::send_state(
-                                        &Self::State { polling: true, blocking: false },
-                                        &sender
-                                    ).await;
+                                        &Self::State { polling: true, blocking: false }, &sender).await;
                                     blocking = false
                                 }
                             }
@@ -204,6 +206,8 @@ pub enum TripWireError {
     InvalidFs{path: String},
     #[error("error accessing I2C device for {tag:?}")]
     I2CError{tag: String},
+    #[error("too many invalid readings from device.")]
+    MeasureError,
     #[error("could not send state update")]
     SendError,
 }
