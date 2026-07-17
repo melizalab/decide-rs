@@ -20,7 +20,7 @@ use std::sync::{
 };
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
-use tokio::{self, task::JoinHandle, time::{Duration, Instant}};
+use tokio::{self, task::JoinHandle, time::{Duration}};
 
 pub struct PeckLeds {
     handles: MultiLineHandle,
@@ -45,26 +45,11 @@ impl Component for PeckLeds {
     const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
-        use std::fs;
-        use std::path::{Path, PathBuf};
-        use std::time::Duration;
-        use std::thread;
 
         if !Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists() {
-            let chip_path = String::from("/sys/class/i2c-adapter/i2c-1/new_device");
-            let sysfs_chip = fs::canonicalize(PathBuf::from(chip_path.clone()))
-                .map_err(|_e| DecideError::Component { source:
-                    PeckBoardError::InvalidFs { requested: chip_path}.into()})
-                .unwrap();
-            fs::write(sysfs_chip.clone(), "pcf8575 0x20")
-                .map_err(|_e| DecideError::Component { source:
-                    PeckBoardError::WriteError { path: sysfs_chip,
-                                                 value: "pcf8575 0x20".to_string()}.into()})
-                .unwrap();
-            tracing::debug!("peckboard gpio chip initiated");
-            assert!(Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists());
-        }
-        thread::sleep(Duration::from_secs(2));
+            panic!("{}", PeckBoardError::MissingDevice);
+        };
+
         let mut chip4 = Chip::new(config.peckboard_chip.clone())
             .map_err(|_e| DecideError::Component { source:
                 PeckBoardError::GpioChipError {dev: config.peckboard_chip}.into()
@@ -347,6 +332,8 @@ impl LedColor {
 
 #[derive(Error, Debug)]
 pub enum PeckBoardError {
+    #[error("peckboard device not detected on i2c bus.")]
+    MissingDevice,
     #[error("could not find file for writing brightness value: {requested:?}")]
     InvalidFs{requested: String},
     #[error("could not write value {value:?} to file {path:?}")]
