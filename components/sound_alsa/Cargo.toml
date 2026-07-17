@@ -20,6 +20,7 @@ atomic-wait = "1.1.0"
 tracing = "0.1.29"
 
 walkdir = '2.3.3'
+expanduser = '1.2.2'
 wav = "1.0.0"
 alsa = "0.9.1"
 sndfile = "0.1.1"

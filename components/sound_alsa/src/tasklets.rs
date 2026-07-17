@@ -12,6 +12,7 @@ use sndfile;
 use serde::Deserialize;
 use sndfile::{ReadOptions, SndFileIO};
 use walkdir::WalkDir;
+use expanduser::expanduser;
 use decide_protocol::error::DecideError;
 use thiserror::Error;
 
@@ -31,9 +32,10 @@ pub fn import_audio(switch: Arc<AtomicU32>,
             .map_err(|e| DecideError::Component {source: e.into()}).unwrap();
             // important to retain the error of parsing process
 
-        tracing::info!("sound-alsa stimuli folder specified by config file: {:?}", &exp_config.stimulus_root);
+        let stim_root = expanduser(&exp_config.stimulus_root).unwrap();
+        tracing::info!("sound-alsa stimuli folder specified by config file: {:?}", &stim_root);
         let playlist = exp_config.get_names();
-        for entry in WalkDir::new(exp_config.stimulus_root.clone())
+        for entry in WalkDir::new(stim_root)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| !e.file_type().is_dir())
