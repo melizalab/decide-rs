@@ -1,13 +1,13 @@
 use lights::Lights;
 use house_light::HouseLight;
-use peckboard::{PeckKeys, PeckLeds};
+use peckboard::PeckKeys;
 use stepper_motor::StepperMotor;
 use ranger_vl53l4::TofSensor;
 use ranger_vcnl4040::ProxSensor;
 use sound_alsa::AlsaPlayback;
 use gpio_led::{MonoLed, RGBLed};
 use gpio_switch::GpioSwitch;
-use finchboard::{FbKeys, FbLeds};
+use finchboard::FbKeys;
 
 macro_rules! impl_components {
     ($($component:ident),*) => {
@@ -182,4 +182,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,PeckLeds,PeckKeys,AlsaPlayback,TofSensor,ProxSensor,MonoLed,RGBLed,GpioSwitch,FbKeys,FbLeds);
+impl_components!(Lights,HouseLight,StepperMotor,PeckKeys,AlsaPlayback,TofSensor,ProxSensor,MonoLed,RGBLed,GpioSwitch,FbKeys);
