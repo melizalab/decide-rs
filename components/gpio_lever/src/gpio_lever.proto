@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-message GlevState {
-  bool switch = 1;
-}
-
-message GlevParams {
-}
