@@ -1,2 +1,10 @@
-[target.armv7-unknown-linux-gnueabihf]
-image = "decide-rs/image:tag"
+
+[build]
+default-target = "armv7-unknown-linux-gnueabihf"
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get --assume-yes install libasound2-dev:$CROSS_DEB_ARCH libzmq3-dev:$CROSS_DEB_ARCH libsndfile-dev:$CROSS_DEB_ARCH pkg-config"
+]
+
+[build.env]
+passthrough = ["PKG_CONFIG_PATH", "PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig"]
