@@ -1,8 +1,13 @@
 syntax = "proto3";
 
-message GledState {
-  bool switch = 1;
+message MonoLedState {
+  bool state = 1;
 }
 
-message GledParams {
+message MonoLedParams {}
+
+message RgbLedState {
+  string state = 1;
 }
+
+message RgbLedParams {}
