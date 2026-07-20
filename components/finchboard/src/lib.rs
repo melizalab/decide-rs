@@ -93,7 +93,7 @@ impl Component for FbKeys {
                         tech: "key".to_string(),
                         flag: "INPUT".to_string()}.into() })
                 .unwrap();
-            let right_handles: MultiLineHandle = dev_chip.get_lines(&config.right_offset)
+            let right_handles: MultiLineHandle = dev_chip.get_lines(&config.right_offsets)
                 .map_err(|_e| DecideError::Component { source:
                     FinchBoardError::GpioLineReqError {
                         pos: "right".to_string(),
@@ -319,7 +319,7 @@ pub struct FbKeyConfig {
     interrupt_chip: String, // /dev/gpiochip2
     interrupt_offset: u32, // 22-25
     left_offsets: Vec<u32>, // 12, 13
-    right_offset: Vec<u32>, // 14, 15
+    right_offsets: Vec<u32>, // 14, 15
 }
 #[derive(Deserialize)]
 pub struct FbLedConfig {
