@@ -18,6 +18,7 @@ atomic-wait = "1.1.0"
 thiserror = "2.0.9"
 futures = "0.3.17"
 vl53l4cd = "0.4.0"
+vcnl4040 = { git = "https://github.com/bpqle/vcnl4040.git", rev = "ff8b326"}
 linux-embedded-hal-async = {path = './linux-embedded-hal-async'}
 i2cdev = "0.6.1"
 simple_moving_average = "1.0.2"
