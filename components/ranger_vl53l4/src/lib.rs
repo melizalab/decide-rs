@@ -66,7 +66,7 @@ impl Component for TofSensor {
             let dev = i2c::LinuxI2c::new(
                 LinuxI2CBus::new(config.i2c_bus.clone())
                     .map_err(|_e| DecideError::Component { source:
-                        TripWireError::InvalidFs{path: config.i2c_bus.clone()}.into()
+                        TofError::InvalidFs{path: config.i2c_bus.clone()}.into()
                     }).unwrap()
             );
             let mut sensor = Vl53l4cd::new(
@@ -84,11 +84,11 @@ impl Component for TofSensor {
 
             sensor.init().await
                 .map_err(|_e| DecideError::Component {source:
-                    TripWireError::I2CError {tag:"init".to_string()}.into() })
+                    TofError::I2CError {tag:"init".to_string()}.into() })
                 .unwrap();
             sensor.set_range_timing(timing[0], timing[1]).await
                 .map_err(|_e| DecideError::Component {source:
-                    TripWireError::I2CError {tag:"set_range_timing".to_string()}.into() })
+                    TofError::I2CError {tag:"set_range_timing".to_string()}.into() })
                 .unwrap();
             let mut rolling_range = NoSumSMA::<_, u16, 5>::new();
             let mut mean_range: u16;
@@ -104,7 +104,7 @@ impl Component for TofSensor {
                         Err(_e) => {
                             tracing::warn!("measure invalid! {_e}");
                             if error_count+1 > 20 {
-                                panic!("{}", &TripWireError::MeasureError);
+                                panic!("{}", &TofError::MeasureError);
                             } else {
                                 error_count +=1;
                                 continue 'measure
@@ -174,7 +174,7 @@ impl Component for TofSensor {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
         }).await.map_err(|_e| DecideError::Component { source:
-            TripWireError::SendError.into() }).unwrap();
+            TofError::SendError.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {
@@ -201,7 +201,7 @@ pub struct Config {
 }
 
 #[derive(Error, Debug)]
-pub enum TripWireError {
+pub enum TofError {
     #[error("could not access file {path:?}")]
     InvalidFs{path: String},
     #[error("error accessing I2C device for {tag:?}")]
