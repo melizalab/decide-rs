@@ -1,5 +1,5 @@
 [package]
-name = "ranger_vl53l4"
+name = "range_finder"
 version = "1.0.0"
 edition = "2021"
 

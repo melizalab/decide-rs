@@ -194,7 +194,7 @@ impl Component for Prox4040Sensor {
     const PARAMS_TYPE_URL: &'static str = "type.googleapis.com/TofParams";
 
     fn new(config: Self::Config, state_sender: mpsc::Sender<Any>) -> Self{
-        ProxSensor {
+        Prox4040Sensor {
             polling: Arc::new(AtomicU32::new(1)),
             blocking: Arc::new(AtomicBool::new(false)),
             range: Arc::new([
@@ -320,7 +320,7 @@ impl Component for Prox4040Sensor {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
         }).await.map_err(|_e| DecideError::Component { source:
-        TripWireError::SendError.into() }).unwrap();
+        TofError::SendError.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {

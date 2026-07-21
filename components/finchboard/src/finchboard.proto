@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-message FbKeyState {
-    bool peck_left = 1;
-    bool peck_right = 2;
-}
-
-message FbKeyParams {}
