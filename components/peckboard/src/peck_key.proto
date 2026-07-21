@@ -6,6 +6,4 @@ message KeyState {
   bool peck_right = 3;
 }
 
-message KeyParams {
-
-}
+message KeyParams {}

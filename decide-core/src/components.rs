@@ -1,6 +1,6 @@
 use lights::Lights;
 use house_light::HouseLight;
-use peckboard::PeckKeys;
+use peckboard::{PeckboardKeys, FinchboardKeys};
 use stepper_motor::StepperMotor;
 use ranger_vl53l4::TofSensor;
 use ranger_vcnl4040::ProxSensor;
@@ -182,4 +182,4 @@ macro_rules! impl_components {
     }
 }
 
-impl_components!(Lights,HouseLight,StepperMotor,PeckKeys,AlsaPlayback,TofSensor,ProxSensor,MonoLed,RGBLed,GpioSwitch,FbKeys);
+impl_components!(Lights,HouseLight,StepperMotor,PeckboardKeys,FinchboardKeys,AlsaPlayback,TofSensor,ProxSensor,MonoLed,RGBLed,GpioSwitch,FbKeys);
