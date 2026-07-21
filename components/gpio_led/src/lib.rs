@@ -41,11 +41,11 @@ pub mod proto {
 
 #[async_trait]
 impl Component for MonoLed {
-    type State = proto::MonoLedState;
-    type Params = proto::MonoLedParams;
+    type State = proto::LedState;
+    type Params = proto::LedParams;
     type Config = MonoLedConfig;
-    const STATE_TYPE_URL: &'static str = "type.googleapis.com/MonoLedState";
-    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/MonoLedParams";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/LedState";
+    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
 
@@ -81,7 +81,7 @@ impl Component for MonoLed {
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
-        self.led_state = if state.state {LedColor::On} else {LedColor::Off};
+        self.led_state = LedColor::from_str(&state.state);
         self.handle.set_value(self.led_state.mono_as_value())
             .map_err(|_e| DecideError::Component { source:
                 LedError::GpioLineSetError {
@@ -101,7 +101,7 @@ impl Component for MonoLed {
 
     fn get_state(&self) -> Self::State {
         Self::State {
-            state: self.led_state.mono_as_bool() 
+            state: self.led_state.to_str() 
         }
     }
 
@@ -132,11 +132,11 @@ impl Component for MonoLed {
 
 #[async_trait]
 impl Component for RGBLed {
-    type State = proto::RgbLedState;
-    type Params = proto::RgbLedParams;
+    type State = proto::LedState;
+    type Params = proto::LedParams;
     type Config = RGBLedConfig;
-    const STATE_TYPE_URL: &'static str = "type.googleapis.com/RGBLedState";
-    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/RGBLedParams";
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/LedState";
+    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
 
     fn new(config: Self::Config, sender: Sender<Any>) -> Self {
 
@@ -247,30 +247,24 @@ impl LedColor {
             _ => 1
         }
     }
-    fn mono_as_bool(&self) -> bool {
-        match self {
-            LedColor::Off => false,
-            _ => true
-        }
-    }
     fn to_str(&self) -> String {
         match self {
-            LedColor::Off => {"Off".to_string()}
-            LedColor::Red => {"Red".to_string()}
-            LedColor::Blue => {"Blue".to_string()}
-            LedColor::Green => {"Green".to_string()}
-            LedColor::White => {"White".to_string()}
-            LedColor::On => {"On".to_string()}
+            LedColor::Off => {"off".to_string()}
+            LedColor::Red => {"red".to_string()}
+            LedColor::Blue => {"blue".to_string()}
+            LedColor::Green => {"green".to_string()}
+            LedColor::White => {"white".to_string()}
+            LedColor::On => {"on".to_string()}
         }
     }
     fn from_str(text: &str) -> Self {
         match text {
-            "Off" => LedColor::Off,
-            "Red" => LedColor::Red,
-            "Blue" => LedColor::Blue,
-            "Green" => LedColor::Green,
-            "White" => LedColor::White,
-            "On" => LedColor::On,
+            "off" => LedColor::Off,
+            "red" => LedColor::Red,
+            "blue" => LedColor::Blue,
+            "green" => LedColor::Green,
+            "white" => LedColor::White,
+            "on" => LedColor::On,
             _ => LedColor::Off
         }
     }

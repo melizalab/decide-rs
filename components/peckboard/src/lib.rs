@@ -76,9 +76,9 @@ impl Component for PeckKeys {
             while !Path::new("/sys/class/i2c-adapter/i2c-1/1-0020").exists() {
                 tokio::time::sleep(Duration::from_secs(1)).await
             }
-            let mut chip4 = Chip::new(&config.peckboard_chip)
+            let mut chip4 = Chip::new(&config.device_chip)
                 .map_err(|_e| DecideError::Component { source:
-                GpioChipError { dev: config.peckboard_chip }.into()
+                GpioChipError { dev: config.device_chip }.into()
                 }).unwrap();
             chip4.get_lines(&config.ir_offsets)
                 .map_err(|_e| DecideError::Component { source:
@@ -185,7 +185,7 @@ impl Component for PeckKeys {
 pub struct KeyConfig {
     interrupt_chip: String,
     interrupt_offset: u32,
-    peckboard_chip: String,
+    device_chip: String,
     key_offsets: Vec<u32>,
     ir_offsets: Vec<u32>,
 }
