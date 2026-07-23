@@ -1,28 +1,32 @@
 use async_trait::async_trait;
 use decide_protocol::{error::DecideError,
                       Component};
-use gpio_cdev::{Chip,
-                LineHandle,
-                MultiLineHandle,
-                LineRequestFlags,
-};
+use gpio_cdev::{Chip, LineRequestFlags};
 use prost::Message;
 use prost_types::Any;
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::sync::mpsc::Sender;
-use tokio;
+
+use std::sync::{Arc, Mutex, atomic::{
+    AtomicU32, AtomicBool, AtomicU64, Ordering}};
+use tokio::{self, time::{Duration, Instant}, sync::mpsc::{self, Sender}};
+use atomic_wait::{wait, wake_all};
 
 pub struct MonoLed {
-    handle: LineHandle,
-    led_state: LedColor,
-    state_sender: Sender<Any>
+    switch: Arc<AtomicU32>,
+    led_state: Arc<Mutex<LedColor>>,
+    blink: Arc<AtomicBool>,
+    blink_duration: Arc<AtomicU64>,
+    state_sender: Sender<Any>,
+    shutdown: Option<Sender<bool>>
 }
 pub struct RGBLed {
-    handle: MultiLineHandle,
-    led_state: LedColor,
-    state_sender: Sender<Any>
-}
+    switch: Arc<AtomicU32>,
+    led_state: Arc<Mutex<LedColor>>,
+    blink: Arc<AtomicBool>,
+    blink_duration: Arc<AtomicU64>,
+    state_sender: Sender<Any>,
+    shutdown: Option<Sender<bool>>}
 
 #[derive(Deserialize)]
 pub struct RGBLedConfig {
@@ -47,66 +51,147 @@ impl Component for MonoLed {
     const STATE_TYPE_URL: &'static str = "type.googleapis.com/LedState";
     const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
 
-    fn new(config: Self::Config, sender: Sender<Any>) -> Self {
-
-        let mut dev_chip = Chip::new(&config.gpio_chip)
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioChipError { dev: config.gpio_chip.clone() }.into()
-            }).unwrap();
-
-        let handle = dev_chip.get_line(config.gpio_line)
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioLineReqError {
-                    line:config.gpio_line,
-                    dev:config.gpio_chip.clone()
-                }.into()
-            }).unwrap()
-            .request(LineRequestFlags::OUTPUT, LedColor::Off.mono_as_value(), "gpio_mono_led")
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioFlagReqError {
-                    line:config.gpio_line,
-                    dev:config.gpio_chip.clone(),
-                    flag:"OUT".to_string()
-                }.into()
-            }).unwrap();
+    fn new(_config: Self::Config, sender: Sender<Any>) -> Self {
         MonoLed {
-            handle,
-            led_state: LedColor::Off,
+            switch: Arc::new(AtomicU32::new(0)),
+            led_state: Arc::new(Mutex::new(LedColor::Off)),
+            blink: Arc::new(AtomicBool::new(false)),
+            blink_duration: Arc::new(AtomicU64::new(4000)),
             state_sender: sender,
+            shutdown: None
         }
     }
 
-    async fn init(&mut self, _config: Self::Config) {
+    async fn init(&mut self, config: Self::Config) {
+        let switch = self.switch.clone();
+        let led_state = self.led_state.clone();
+        let blink = self.blink.clone();
+        let blink_duration = self.blink_duration.clone();
+        let sender = self.state_sender.clone();
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+
+        let _led_handle = tokio::spawn(async move {
+
+            let mut dev_chip = Chip::new(&config.gpio_chip)
+                .map_err(|_e| DecideError::Component { source:
+                    LedError::GpioChipError { dev: config.gpio_chip.clone() }.into()
+                }).unwrap();
+
+            let handle = dev_chip.get_line(config.gpio_line)
+                .map_err(|_e| DecideError::Component { source:
+                    LedError::GpioLineReqError {
+                        line:config.gpio_line,
+                        dev:config.gpio_chip.clone()
+                    }.into()
+                }).unwrap()
+                .request(LineRequestFlags::OUTPUT, LedColor::Off.mono_as_value(), "gpio_mono_led")
+                .map_err(|_e| DecideError::Component { source:
+                    LedError::GpioFlagReqError {
+                        line:config.gpio_line,
+                        dev:config.gpio_chip.clone(),
+                        flag:"OUT".to_string()
+                    }.into()
+                }).unwrap();
+
+            loop {
+                if shutdown_rx.try_recv().unwrap_err() == mpsc::error::TryRecvError::Disconnected {
+                    handle.set_value(0)
+                        .map_err(|_e| DecideError::Component {
+                            source: LedError::GpioLineSetError {
+                                line: handle.line().offset(),
+                                value: 0
+                            }.into()
+                        }).unwrap();
+                    break
+                }
+                wait(&switch, 0);
+
+                let new_color = *led_state.lock().unwrap();
+                let blinky = blink.load(Ordering::Acquire);
+                match blinky {
+                    false => {
+                        handle.set_value(new_color.mono_as_value())
+                            .map_err(|_e| DecideError::Component { source:
+                                LedError::GpioLineSetError {
+                                    line: handle.line().offset(),
+                                    value: new_color.mono_as_value()
+                                }.into()
+                            }).unwrap();
+                        let new_state = Self::State{
+                            state: new_color.to_str(),
+                            blink: false
+                        };
+                        futures::executor::block_on(Self::send_state(&new_state, &sender));
+                        switch.store(0, Ordering::Release);
+                    }
+                    true => {
+                        let blink_dur = blink_duration.load(Ordering::Acquire);
+                        let timer = Instant::now();
+                        let mut alt_color = new_color;
+                        futures::executor::block_on(Self::send_state(&Self::State{
+                            state: new_color.to_str(),
+                            blink: true,
+                        }, &sender));
+
+                        while Instant::now().duration_since(timer) < Duration::from_millis(blink_dur) {
+                            handle.set_value(alt_color.mono_as_value())
+                                .map_err(|_e: gpio_cdev::Error| DecideError::Component { source:
+                                    LedError::GpioLineSetError {
+                                        line: handle.line().offset(),
+                                        value: alt_color.mono_as_value()
+                                    }.into()
+                            }).unwrap();
+                            alt_color = if alt_color==new_color {LedColor::Off} else {new_color}; 
+                        }
+
+                        handle.set_value(LedColor::Off.mono_as_value())
+                            .map_err(|_e: gpio_cdev::Error| DecideError::Component { source:
+                                LedError::GpioLineSetError {
+                                    line: handle.line().offset(),
+                                    value: LedColor::Off.mono_as_value()
+                                }.into()
+                        }).unwrap();
+
+                        blink.store(false, Ordering::Release);
+                        futures::executor::block_on(Self::send_state(&Self::State{
+                            state: LedColor::Off.to_str(),
+                            blink: false,
+                        }, &sender));
+                    }
+                }
+            }
+        });
+        self.shutdown = Some(shutdown_tx);
         tracing::info!("mono led initiated")
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
-        self.led_state = LedColor::from_str(&state.state);
-        self.handle.set_value(self.led_state.mono_as_value())
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioLineSetError {
-                    line: self.handle.line().offset(),
-                    value: self.led_state.mono_as_value()
-                }.into()
-            })?;
-        let sender = self.state_sender.clone();
-        futures::executor::block_on(Self::send_state(&state, &sender));
+        self.blink.store(state.blink, Ordering::Release);
+        let mut led_state = self.led_state.lock().unwrap();
+        *led_state = LedColor::from_str(&state.state);
+        self.switch.store(1, Ordering::Release);
+        wake_all(self.switch.as_ref());
         Ok(())
     }
 
-    fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
-        tracing::error!("change params not implemented for led");
+    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
+        self.blink_duration.store(params.blink_duration, Ordering::Release);
         Ok(())
     }
 
     fn get_state(&self) -> Self::State {
+        let state = self.led_state.lock().unwrap();
+        let blink = self.blink.load(Ordering::Acquire);
         Self::State {
-            state: self.led_state.to_str() 
+            state: state.to_str(),
+            blink
         }
     }
 
     fn get_parameters(&self) -> Self::Params {
-        Self::Params{}
+        Self::Params{
+            blink_duration: self.blink_duration.load(Ordering::Acquire)
+        }
     }
 
     async fn send_state(state: &Self::State, sender: &Sender<Any>) {
@@ -120,13 +205,8 @@ impl Component for MonoLed {
     }
 
     async fn shutdown(&mut self) {
-        self.handle.set_value(0)
-            .map_err(|_e| DecideError::Component {
-                source: LedError::GpioLineSetError {
-                    line: self.handle.line().offset(),
-                    value: self.led_state.mono_as_value()
-                }.into()
-            }).unwrap()
+        let shutdown_tx = self.shutdown.take().unwrap();
+        drop(shutdown_tx);
     }
 }
 
@@ -138,65 +218,143 @@ impl Component for RGBLed {
     const STATE_TYPE_URL: &'static str = "type.googleapis.com/LedState";
     const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/LedParams";
 
-    fn new(config: Self::Config, sender: Sender<Any>) -> Self {
-
-        let mut dev_chip = Chip::new(&config.gpio_chip)
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioChipError { dev: config.gpio_chip.clone() }.into()
-            }).unwrap();
-
-        let handle = dev_chip.get_lines(&config.gpio_lines)
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioLinesReqError {
-                    lines: config.gpio_lines,
-                    dev:config.gpio_chip.clone()
-                }.into()
-            }).unwrap()
-            .request(LineRequestFlags::OUTPUT, &LedColor::Off.as_value(), "gpio_rgb_led")
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioFlagsReqError {
-                    lines:config.gpio_lines,
-                    dev:config.gpio_chip.clone(),
-                    flag:"OUT".to_string()
-                }.into()
-            }).unwrap();
+    fn new(_config: Self::Config, sender: Sender<Any>) -> Self {
         RGBLed {
-            handle,
-            led_state: LedColor::Off,
+            switch: Arc::new(AtomicU32::new(0)),
+            led_state: Arc::new(Mutex::new(LedColor::Off)),
+            blink: Arc::new(AtomicBool::new(false)),
+            blink_duration: Arc::new(AtomicU64::new(4000)),
             state_sender: sender,
+            shutdown: None
         }
     }
 
-    async fn init(&mut self, _config: Self::Config) {
-        tracing::info!("mono led initiated")
+    async fn init(&mut self, config: Self::Config) {
+        let switch = self.switch.clone();
+        let led_state = self.led_state.clone();
+        let blink = self.blink.clone();
+        let blink_duration = self.blink_duration.clone();
+        let sender = self.state_sender.clone();
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+
+        let _led_handle = tokio::spawn(async move {
+
+            let mut dev_chip = Chip::new(&config.gpio_chip)
+                .map_err(|_e| DecideError::Component { source:
+                    LedError::GpioChipError { dev: config.gpio_chip.clone() }.into()
+                }).unwrap();
+
+            let handle = dev_chip.get_lines(&config.gpio_lines)
+                .map_err(|_e| DecideError::Component { source:
+                    LedError::GpioLinesReqError {
+                        lines: config.gpio_lines.clone(),
+                        dev:config.gpio_chip.clone()
+                    }.into()
+                }).unwrap()
+                .request(LineRequestFlags::OUTPUT, &LedColor::Off.as_value(), "gpio_rgb_led")
+                .map_err(|_e| DecideError::Component { source:
+                    LedError::GpioFlagsReqError {
+                        lines: config.gpio_lines.clone(),
+                        dev:config.gpio_chip.clone(),
+                        flag:"OUT".to_string()
+                    }.into()
+                }).unwrap();
+
+            loop {
+                if shutdown_rx.try_recv().unwrap_err() == mpsc::error::TryRecvError::Disconnected {
+                    handle.set_values(&LedColor::Off.as_value())
+                        .map_err(|_e| DecideError::Component {
+                            source: LedError::GpioLinesSetError {
+                                value: LedColor::Off.as_value()
+                            }.into()
+                        }).unwrap();
+                    break
+                }
+                wait(&switch, 0);
+
+                let new_color = *led_state.lock().unwrap();
+                let blinky = blink.load(Ordering::Acquire);
+                match blinky {
+                    false => {
+                        handle.set_values(&new_color.as_value())
+                            .map_err(|_e| DecideError::Component { source:
+                                LedError::GpioLinesSetError {
+                                    value: new_color.as_value()
+                                }.into()
+                            }).unwrap();
+                        let new_state = Self::State{
+                            state: new_color.to_str(),
+                            blink: false
+                        };
+                        futures::executor::block_on(Self::send_state(&new_state, &sender));
+                        switch.store(0, Ordering::Release);
+                    }
+                    true => {
+                        let blink_dur = blink_duration.load(Ordering::Acquire);
+                        let timer = Instant::now();
+                        let mut alt_color = new_color;
+                        futures::executor::block_on(Self::send_state(&Self::State{
+                            state: new_color.to_str(),
+                            blink: true,
+                        }, &sender));
+
+                        while Instant::now().duration_since(timer) < Duration::from_millis(blink_dur) {
+                            handle.set_values(&alt_color.as_value())
+                                .map_err(|_e: gpio_cdev::Error| DecideError::Component { source:
+                                    LedError::GpioLinesSetError {
+                                        value: alt_color.as_value()
+                                    }.into()
+                            }).unwrap();
+                            alt_color = if alt_color==new_color {LedColor::Off} else {new_color}; 
+                        }
+
+                        handle.set_values(&LedColor::Off.as_value())
+                            .map_err(|_e: gpio_cdev::Error| DecideError::Component { source:
+                                LedError::GpioLinesSetError {
+                                    value: LedColor::Off.as_value()
+                                }.into()
+                        }).unwrap();
+
+                        blink.store(false, Ordering::Release);
+                        futures::executor::block_on(Self::send_state(&Self::State{
+                            state: LedColor::Off.to_str(),
+                            blink: false,
+                        }, &sender));
+                    }
+                }
+            }
+        });
+        self.shutdown = Some(shutdown_tx);
+        tracing::info!("rgb led initiated")
     }
 
     fn change_state(&mut self, state: Self::State) -> decide_protocol::Result<()> {
-        self.led_state = LedColor::from_str(&state.state);
-        self.handle.set_values(&self.led_state.as_value())
-            .map_err(|_e| DecideError::Component { source:
-                LedError::GpioLinesSetError {
-                    value: self.led_state.as_value()
-                }.into()
-            }).unwrap();
-        let sender = self.state_sender.clone();
-        futures::executor::block_on(Self::send_state(&state, &sender));
+        self.blink.store(state.blink, Ordering::Release);
+        let mut led_state = self.led_state.lock().unwrap();
+        *led_state = LedColor::from_str(&state.state);
+        self.switch.store(1, Ordering::Release);
+        wake_all(self.switch.as_ref());
         Ok(())
     }
 
-    fn set_parameters(&mut self, _params: Self::Params) -> decide_protocol::Result<()> {
-        tracing::error!("change params not implemented for led");
+    fn set_parameters(&mut self, params: Self::Params) -> decide_protocol::Result<()> {
+        self.blink_duration.store(params.blink_duration, Ordering::Release);
         Ok(())
     }
 
     fn get_state(&self) -> Self::State {
+        let state = self.led_state.lock().unwrap();
+        let blink = self.blink.load(Ordering::Acquire);
         Self::State {
-            state: self.led_state.to_str() 
+            state: state.to_str(),
+            blink
         }
     }
 
     fn get_parameters(&self) -> Self::Params {
-        Self::Params{}
+        Self::Params{
+            blink_duration: self.blink_duration.load(Ordering::Acquire)
+        }
     }
 
     async fn send_state(state: &Self::State, sender: &Sender<Any>) {
@@ -210,12 +368,8 @@ impl Component for RGBLed {
     }
 
     async fn shutdown(&mut self) {
-        self.handle.set_values(&LedColor::Off.as_value())
-            .map_err(|_e| DecideError::Component {
-                source: LedError::GpioLinesSetError {
-                    value: LedColor::Off.as_value()
-                }.into()
-            }).unwrap()
+        let shutdown_tx = self.shutdown.take().unwrap();
+        drop(shutdown_tx);
     }
 }
 

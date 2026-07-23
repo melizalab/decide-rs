@@ -2,6 +2,9 @@ syntax = "proto3";
 
 message LedState {
   string state = 1;
+  bool blink = 2;
 }
 
-message LedParams {}
+message LedParams {
+  uint64 blink_duration = 1;
+}
