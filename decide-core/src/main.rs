@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0)
     };
 
-    let timer_fmt = time::format_description::parse(
+    let timer_fmt = time::format_description::parse_borrowed::<3>(
         "[year]-[month padding:zero]-[day padding:zero] [hour]:[minute]:[second]",
     ).expect(" Setting Timer Format ");
     let timer_offset = time::UtcOffset::current_local_offset()

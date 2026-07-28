@@ -11,13 +11,13 @@ use serde::Deserialize;
 use thiserror::Error;
 use tokio::{self, time::{Duration}, sync::mpsc::Sender, task::JoinHandle};
 
-pub struct GpioLever {
+pub struct GpioSwitch {
     state_sender: Sender<Any>,
     task_handle: Option<JoinHandle<()>>
 }
 
 #[derive(Deserialize)]
-pub struct LeverConfig {
+pub struct SwitchConfig {
     chip: String,
     line: u32,
 }
@@ -27,15 +27,15 @@ pub mod proto {
 }
 
 #[async_trait]
-impl Component for GpioLever {
-    type State = proto::GlevState;
-    type Params = proto::GlevParams;
-    type Config = LeverConfig;
-    const STATE_TYPE_URL: &'static str = "type.googleapis.com/GlevState";
-    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/GlevParams";
+impl Component for GpioSwitch {
+    type State = proto::SwitchState;
+    type Params = proto::SwitchParams;
+    type Config = SwitchConfig;
+    const STATE_TYPE_URL: &'static str = "type.googleapis.com/SwitchState";
+    const PARAMS_TYPE_URL: &'static str =  "type.googleapis.com/SwitchParams";
 
     fn new(_config: Self::Config, sender: Sender<Any>) -> Self {
-        GpioLever {
+        GpioSwitch {
             state_sender: sender,
             task_handle: None}
     }
@@ -45,11 +45,11 @@ impl Component for GpioLever {
         self.task_handle = Some(tokio::spawn(async move {
             let mut chip = Chip::new(config.chip.clone())
                 .map_err(|_e| DecideError::Component { source:
-                    LevError::GpioChipError {dev: config.chip}.into()
+                    SwitchError::GpioChipError {dev: config.chip}.into()
                 }).unwrap();
             let gpio_interrupt_line = chip.get_line(config.line.clone())
                 .map_err(|_e| DecideError::Component { source:
-                    LevError::GpioLineReqError {line: config.line}.into()
+                    SwitchError::GpioLineReqError {line: config.line}.into()
                 }).unwrap();
             let mut interrupt = AsyncLineEventHandle::new(
                 gpio_interrupt_line.events(LineRequestFlags::INPUT,
@@ -57,11 +57,11 @@ impl Component for GpioLever {
                                         "lever-interrupt"     // but oddly setting flags to FALLING_EDGE still
                                         )             // gives us both edges.
                     .map_err(|_e| DecideError::Component {source:
-                        LevError::GpioFlagReqError {line: config.line,
+                        SwitchError::GpioFlagReqError {line: config.line,
                                           flag: "INPUT".to_string()}.into() })
                     .unwrap())
                 .map_err(|_e: gpio_cdev::Error| DecideError::Component { source:
-                    LevError::GpioAsyncLineError {line: config.line}.into()})
+                    SwitchError::GpioAsyncLineError {line: config.line}.into()})
                 .unwrap();
 
             loop {
@@ -113,7 +113,7 @@ impl Component for GpioLever {
             type_url: String::from(Self::STATE_TYPE_URL),
             value: state.encode_to_vec(),
         }).await.map_err(|_e| DecideError::Component { source:
-        LevError::SendError.into() }).unwrap();
+            SwitchError::SendError.into() }).unwrap();
     }
 
     async fn shutdown(&mut self) {
@@ -126,7 +126,7 @@ impl Component for GpioLever {
 
 
 #[derive(Error, Debug)]
-pub enum LevError {
+pub enum SwitchError {
     #[error("could not initialize gpio device {dev:?}")]
     GpioChipError{dev:String},
     #[error("could not request lines {line:?} from gpio device")]

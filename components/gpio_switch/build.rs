@@ -4,6 +4,6 @@ extern crate prost_build;
 
 fn main() -> Result<()> {
     std::env::set_var("PROTOC", protobuf_src::protoc());
-    prost_build::compile_protos(&["src/gpio_lever.proto"], &["src/"])?;
+    prost_build::compile_protos(&["src/gpio_switch.proto"], &["src/"])?;
     Ok(())
 }

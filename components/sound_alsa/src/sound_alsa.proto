@@ -1,5 +1,4 @@
 syntax = "proto3";
-import "google/protobuf/duration.proto";
 
 message SaState {
   string audio_id = 1;

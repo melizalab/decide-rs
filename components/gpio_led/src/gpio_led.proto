@@ -1,8 +1,10 @@
 syntax = "proto3";
 
-message GledState {
-  bool switch = 1;
+message LedState {
+  string state = 1;
+  bool blink = 2;
 }
 
-message GledParams {
+message LedParams {
+  uint64 blink_duration = 1;
 }

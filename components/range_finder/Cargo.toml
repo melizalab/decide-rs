@@ -1,5 +1,5 @@
 [package]
-name = "ranger_vl53l4"
+name = "range_finder"
 version = "1.0.0"
 edition = "2021"
 
@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 decide-protocol = { path = "../../decide-protocol" }
-prost = "0.13.4"
-prost-types = "0.13.4"
+prost = "0.14.4"
+prost-types = "0.14.4"
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1.29"
 
@@ -18,10 +18,11 @@ atomic-wait = "1.1.0"
 thiserror = "2.0.9"
 futures = "0.3.17"
 vl53l4cd = "0.4.0"
+vcnl4040 = { git = "https://github.com/bpqle/vcnl4040.git", rev = "ff8b326"}
 linux-embedded-hal-async = {path = './linux-embedded-hal-async'}
 i2cdev = "0.6.1"
 simple_moving_average = "1.0.2"
 
 [build-dependencies]
-prost-build = "0.11.1"
+prost-build = "0.14.4"
 protobuf-src = "1.1.0+21.5"
