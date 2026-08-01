@@ -8,11 +8,25 @@ use futures::{Stream, StreamExt};
 use lights::Lights;
 use prost::Message;
 use prost_types::Any;
+use sha3::{Digest, Sha3_256};
 use tmq::{request, subscribe, Context, Multipart};
+use tokio::sync::Mutex;
 use tokio::test;
 #[macro_use]
 extern crate tracing;
 use rstest::*;
+
+const HOUSE_LIGHTS_CONFIG: &str = "
+            house-lights:
+              driver: Lights
+              config:
+                pin: 4";
+
+// derived from the config text itself so it can never drift out of sync,
+// the way the old hardcoded literal did
+fn config_identifier() -> String {
+    format!("{:x}", Sha3_256::digest(HOUSE_LIGHTS_CONFIG.as_bytes()))
+}
 
 struct Decide;
 
@@ -25,17 +39,34 @@ impl Drop for Decide {
 #[fixture]
 #[once]
 fn decide() -> Decide {
-    tokio::spawn(async {
-        let config = "
-            house-lights:
-              driver: Lights
-              config:
-                pin: 4";
-        let (components, state_stream) = ComponentCollection::from_reader(config.as_bytes())?;
-        let res = run::launch_decide(components, state_stream)?;
-        res.await
+    // Run on a dedicated thread with its own long-lived runtime, rather than
+    // tokio::spawn on whichever test's runtime happens to invoke this fixture
+    // first: #[tokio::test] gives every test its own runtime that's torn down
+    // when that test returns, which would kill the server along with it.
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().expect("failed to build decide-core runtime");
+        rt.block_on(async {
+            let (components, state_stream) =
+                ComponentCollection::from_reader(HOUSE_LIGHTS_CONFIG.as_bytes())?;
+            let res = run::launch_decide(components, state_stream)?;
+            res.await
+        })
+        .expect("decide-core instance exited with an error");
     });
-    return Decide;
+    // give the dedicated thread a moment to bind the ZMQ sockets before any
+    // test tries to connect
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    Decide
+}
+
+// the three tests below all talk to the single shared `decide` instance
+// above, so they can't run concurrently without racing on shared lock/component
+// state; this fixture serializes their bodies regardless of how the test
+// harness schedules them across threads
+#[fixture]
+#[once]
+fn test_lock() -> Mutex<()> {
+    Mutex::new(())
 }
 
 async fn send_request(message: Request) -> anyhow::Result<reply::Result> {
@@ -72,9 +103,7 @@ fn pub_stream(topic: &[u8]) -> anyhow::Result<impl Stream<Item = Pub>> {
 macro_rules! lock {
     () => {{
         let config = Config {
-            identifier: String::from(
-                "39c12c22af89685008eb9725a40b94089dfa36d27cfc0cdb912629c6ff2de50e",
-            ),
+            identifier: config_identifier(),
         };
         let request = Request {
             request_type: RequestType::General(GeneralRequest::RequestLock),
@@ -100,7 +129,8 @@ macro_rules! unlock {
 
 #[rstest]
 #[test]
-async fn locking_behavior(decide: &Decide) -> anyhow::Result<()> {
+async fn locking_behavior(decide: &Decide, test_lock: &Mutex<()>) -> anyhow::Result<()> {
+    let _guard = test_lock.lock().await;
     let result = lock!();
     assert_eq!(result, reply::Result::Ok(()));
     let result = lock!();
@@ -118,7 +148,8 @@ async fn locking_behavior(decide: &Decide) -> anyhow::Result<()> {
 
 #[rstest]
 #[test]
-async fn parameters(decide: &Decide) {
+async fn parameters(decide: &Decide, test_lock: &Mutex<()>) {
+    let _guard = test_lock.lock().await;
     let params = Any {
         type_url: String::from(Lights::PARAMS_TYPE_URL),
         value: lights::proto::Params { blink: false }.encode_to_vec(),
@@ -144,7 +175,8 @@ async fn parameters(decide: &Decide) {
 
 #[rstest]
 #[test]
-async fn state(decide: &Decide) {
+async fn state(decide: &Decide, test_lock: &Mutex<()>) {
+    let _guard = test_lock.lock().await;
     let state = Any {
         type_url: String::from(Lights::STATE_TYPE_URL),
         value: lights::proto::State { on: true }.encode_to_vec(),
@@ -158,8 +190,12 @@ async fn state(decide: &Decide) {
         body: state_message.encode_to_vec(),
     };
     // the subscriber must be initialized before the state change is
-    // sent because the publish socket doesn't buffer messages
+    // sent because the publish socket doesn't buffer messages; ZMQ's
+    // subscription handshake is also async, so give it a moment to actually
+    // reach the publisher before triggering the state change (the "slow
+    // joiner" problem)
     let mut state_stream = pub_stream(b"state/house-lights").unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let result = send_request(request).await.unwrap();
     assert_eq!(result, reply::Result::Ok(()));
     trace!("waiting for pub");

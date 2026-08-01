@@ -25,6 +25,7 @@ tracing = {version = "0.1", default-features = false}
 tracing-subscriber = {version = "0.3", default-features = false, features = ["env-filter", "fmt"]}
 rstest = "0.26.1"
 decide-core = { path = "../../decide-core"}
+sha3 = "0.10.6" # matches decide-core's hard-pinned version
 async-std = { version = "1.5", features = ["attributes"] }
 
 
