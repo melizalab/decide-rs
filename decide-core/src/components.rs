@@ -102,7 +102,7 @@ macro_rules! impl_components {
 
                         // Generic method for emitting state change from within thread
                         async fn send_state(
-                            state: Self::State,
+                            state: &Self::State,
                             sender: &mpsc::Sender<Any>
                         ) {}
 

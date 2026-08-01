@@ -30,11 +30,14 @@ Logging level defaults to INFO, but can be overwritten with `export DECIDE_LOG="
 
 ## running tests
 
-The tests require a running instance of `decide`, otherwise they will hang.
-```bash
-mkdir -p ~/.config/decide/
-ln -s components/lights/tests/components.yml ~/.config/decide/
-cargo run &
-cargo test
-kill $(jobs -l -p)
-```
+Just run `cargo test` (or `cargo test -p <crate>`) as normal — no external
+setup required.
+
+`components/lights` is currently the only crate with integration tests.
+Its test suite spins up its own `decide-core` instance in-process (on a
+dedicated thread with its own Tokio runtime, so it stays alive for the
+whole test binary) bound to the standard ZMQ endpoints
+(`tcp://127.0.0.1:7897`/`7898`). Because of that, **do not** have a
+separate `cargo run`/`decide-core` instance running at the same time you
+run its tests — it will fight over the same ports and the tests will fail
+or hang.
